@@ -595,9 +595,9 @@ class DishSimulation():
         if self._count == 0:
             state_curr, self._setting = self.env.reset(
                 table_size  = setting["table_size"],
-                pusher_pose = setting["pusher_pose"],
+                pusher_pose = None,
                 slider_pose = setting["slider_pose"],
-                slider_num  = setting["slider_num"],
+                slider_num  = None,
                 )
             self._count += 1
         else:

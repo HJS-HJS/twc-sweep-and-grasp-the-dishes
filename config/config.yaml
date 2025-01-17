@@ -16,4 +16,4 @@ gripper:
     z_angle: -31.8175
 
 simulation:
-  test:
+  test: 1

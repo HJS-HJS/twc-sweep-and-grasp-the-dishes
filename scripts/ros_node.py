@@ -113,9 +113,9 @@ class SweepGraspDishesServer(object):
 
         # param for simulation
         table_size  = np.array([table_center[0] - map_corners[0], table_center[1] - map_corners[2]]) * 2
-        pusher_pose = None
+        pusher_pose = []
         slider_pose = []
-        slider_num  = None
+        slider_num  = []
 
         # target dish
         masked_depth_image = np.multiply(depth_img, target_segmask)
@@ -147,54 +147,54 @@ class SweepGraspDishesServer(object):
         for _obs in obs_ellipse_list:
             rospy.loginfo("obstacle dish [m]: \t x: {:.3f}, y: {:.3f}".format(_obs.center[0], _obs.center[1]))
 
-        # Publish edge of the dishes
+        # # Publish edge of the dishes
         # if self.planner_config["publish_vis_topic"]:
-            _edge_marker_list = MarkerArray()
-            _id = 0
-            _edge_marker = Marker()
-            _edge_marker.header.frame_id = camera_pose_msg.header.frame_id
-            _edge_marker.ns = "dish_edge_marker"
-            _edge_marker.id = 0
-            _edge_marker.type = Marker.LINE_STRIP
-            _edge_marker.pose.position.x = 0
-            _edge_marker.pose.position.y = 0
-            _edge_marker.pose.position.z = 0
-            _edge_marker.pose.orientation.x = 0
-            _edge_marker.pose.orientation.y = 0
-            _edge_marker.pose.orientation.z = 0
-            _edge_marker.pose.orientation.w = 1
-            _edge_marker.scale.x = 0.01
-            _edge_marker.scale.y = 0.01
-            _edge_marker.scale.z = 0.01
-            _edge_marker.color.a = 1.0
-            _edge_marker.color.r = 1.0
-            _edge_marker.color.g = 1.0
-            _edge_marker.color.b = 0.0
-            _edge_marker.points = []
-            # target dish
-            _edge = copy.deepcopy(_edge_marker)
-            for _point in target_ellipse.get_ellipse_pts(npts=20).T:
-                _p = Point()
-                _p.x, _p.y, _p.z = _point[0], _point[1], table_center[2] + 0.1
-                _edge.points.append(_p)
-            _edge.color.r = 0.0
-            _edge.color.g = 0.0
-            _edge.color.b = 1.0
-            _edge.id = _id
-            _id += 1
-            _edge_marker_list.markers.append(_edge)
-            # Obstacle dish
-            for _dish in obs_ellipse_list:
-                _edge = copy.deepcopy(_edge_marker)
-                for _point in _dish.get_ellipse_pts(npts=20).T:
-                    _p = Point()
-                    _p.x, _p.y, _p.z = _point[0], _point[1], table_center[2] + 0.1
-                    _edge.points.append(_p)
-                _edge.id = _id
-                _id += 1
-                _edge_marker_list.markers.append(_edge)
-            self.dish_edge_pub.publish(_edge_marker_list)
-            rospy.loginfo("Publish the edge of the dishes as ROS topic.")
+        #     _edge_marker_list = MarkerArray()
+        #     _id = 0
+        #     _edge_marker = Marker()
+        #     _edge_marker.header.frame_id = camera_pose_msg.header.frame_id
+        #     _edge_marker.ns = "dish_edge_marker"
+        #     _edge_marker.id = 0
+        #     _edge_marker.type = Marker.LINE_STRIP
+        #     _edge_marker.pose.position.x = 0
+        #     _edge_marker.pose.position.y = 0
+        #     _edge_marker.pose.position.z = 0
+        #     _edge_marker.pose.orientation.x = 0
+        #     _edge_marker.pose.orientation.y = 0
+        #     _edge_marker.pose.orientation.z = 0
+        #     _edge_marker.pose.orientation.w = 1
+        #     _edge_marker.scale.x = 0.01
+        #     _edge_marker.scale.y = 0.01
+        #     _edge_marker.scale.z = 0.01
+        #     _edge_marker.color.a = 1.0
+        #     _edge_marker.color.r = 1.0
+        #     _edge_marker.color.g = 1.0
+        #     _edge_marker.color.b = 0.0
+        #     _edge_marker.points = []
+        #     # target dish
+        #     _edge = copy.deepcopy(_edge_marker)
+        #     for _point in target_ellipse.get_ellipse_pts(npts=20).T:
+        #         _p = Point()
+        #         _p.x, _p.y, _p.z = _point[0], _point[1], table_center[2] + 0.1
+        #         _edge.points.append(_p)
+        #     _edge.color.r = 0.0
+        #     _edge.color.g = 0.0
+        #     _edge.color.b = 1.0
+        #     _edge.id = _id
+        #     _id += 1
+        #     _edge_marker_list.markers.append(_edge)
+        #     # Obstacle dish
+        #     for _dish in obs_ellipse_list:
+        #         _edge = copy.deepcopy(_edge_marker)
+        #         for _point in _dish.get_ellipse_pts(npts=20).T:
+        #             _p = Point()
+        #             _p.x, _p.y, _p.z = _point[0], _point[1], table_center[2] + 0.1
+        #             _edge.points.append(_p)
+        #         _edge.id = _id
+        #         _id += 1
+        #         _edge_marker_list.markers.append(_edge)
+        #     self.dish_edge_pub.publish(_edge_marker_list)
+        #     rospy.loginfo("Publish the edge of the dishes as ROS topic.")
             
         # ready for simulation
         
