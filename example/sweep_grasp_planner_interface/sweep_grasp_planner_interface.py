@@ -5,16 +5,16 @@ Author : Sungwon Seo(ssw0536@g.skku.edu)
 Date   : 2023-01-22
 """
 import rospy
-import swipe_across_the_dishes.srv as swipe_dishes_srv
+import sweep_and_grasp_the_dishes.srv as swipe_dishes_srv
 
 
-class GetSwipeDishesPath(object):
+class GetSweepGraspDishesPath(object):
     def __init__(self):
         # register service
         service_name = '/swipe_across_ths_dishes/get_swipe_dish_path'
         rospy.wait_for_service(service_name)
         self.get_stable_push_path = rospy.ServiceProxy(
-            service_name, swipe_dishes_srv.GetSwipeDishesPath())
+            service_name, swipe_dishes_srv.GetSweepGraspDishesPath())
         rospy.loginfo("Service `%s` is ready" % service_name)
 
     def request(self, dish_segmentation, table_detection, depth_image, camera_info, camera_pose, target_id):
@@ -47,7 +47,7 @@ class GetSwipeDishesPath(object):
         rospy.loginfo("Requesting stable push path")
         start_time = rospy.Time.now()
         try:
-            req = swipe_dishes_srv.GetSwipeDishesPathRequest()
+            req = swipe_dishes_srv.GetSweepGraspDishesPathRequest()
             req.dish_segmentation = dish_segmentation
             req.table_detection = table_detection
             req.depth_image = depth_image

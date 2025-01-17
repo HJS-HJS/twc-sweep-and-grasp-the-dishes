@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import os
+import sys
 import copy
 import numpy as np
 import matplotlib
@@ -16,13 +18,16 @@ from geometry_msgs.msg import PoseStamped, PoseArray, Pose, Point
 from nav_msgs.msg import Path
 from moveit_msgs.msg import CartesianTrajectory, CartesianTrajectoryPoint
 
-from swipe_across_the_dishes.srv import GetSwipeDishesPath, GetSwipeDishesPathRequest, GetSwipeDishesPathResponse
-from swipe_dishes.utils.edge_sampler import EdgeSampler
-from swipe_dishes.utils.ee_converter import cartesianTraj2EETraj
-from swipe_dishes.utils.ellipse import Ellipse
-from swipe_dishes.utils.utils import Angle
+current_file_path = os.path.abspath(__file__)
+current_directory = os.path.dirname(current_file_path)
+sys.path.append(os.path.abspath(current_directory + "/third_party/quasi_static_push/scripts/"))
 
-class SwipeAcrossTheDishesServer(object):
+from utils.dish_simulation import DishSimulation
+from sweep_and_grasp_the_dishes.srv import GetSweepGraspDishesPath, GetSweepGraspDishesPathRequest, GetSweepGraspDishesPathResponse
+from sweep_and_grasp_the_dishes.utils.edge_sampler import EdgeSampler
+from sweep_and_grasp_the_dishes.utils.ellipse import Ellipse
+
+class SweepGraspDishesServer(object):
     
     def __init__(self):
         self.cv_bridge = CvBridge()
@@ -39,7 +44,7 @@ class SwipeAcrossTheDishesServer(object):
         # Initialize ros service.
         rospy.Service(
             '/swipe_across_ths_dishes/get_swipe_dish_path',
-            GetSwipeDishesPath,
+            GetSweepGraspDishesPath,
             self.get_swipe_dish_path_handler
             )
 
@@ -56,20 +61,26 @@ class SwipeAcrossTheDishesServer(object):
             self.dish_edge_pub = rospy.Publisher(
                 '/swipe_across_ths_dishes/dish_edge', MarkerArray, queue_size=2)
             
+        self.sim = DishSimulation(
+            visualize='human',
+            state="linear",
+            action_skip=8,
+        )
+
         # Print info message to terminal when push server is ready.
-        rospy.loginfo('SwipeAcrossTheDishesServer is ready to serve.')
+        rospy.loginfo('SweepGraspDishesServer is ready to serve.')
     
-    def get_swipe_dish_path_handler(self, request:GetSwipeDishesPathRequest) -> GetSwipeDishesPathResponse:
+    def get_swipe_dish_path_handler(self, request:GetSweepGraspDishesPathRequest) -> GetSweepGraspDishesPathResponse:
         """Response to ROS service. make push path and gripper pose by using trained model(push net).
 
         Args:
-            request (GetSwipeDishesPathRequest): ROS service from stable task
+            request (GetSweepGraspDishesPathRequest): ROS service from stable task
 
         Returns:
-            GetSwipeDishesPathResponse: generated push_path(moveit_msgs::CartesianTrajectory()), plan_successful(bool), gripper pose(float32[angle, width])
+            GetSweepGraspDishesPathResponse: generated push_path(moveit_msgs::CartesianTrajectory()), plan_successful(bool), gripper pose(float32[angle, width])
         """
 
-        assert isinstance(request, GetSwipeDishesPathRequest)
+        assert isinstance(request, GetSweepGraspDishesPathRequest)
         # Save service request data.
         dish_seg_msg          = request.dish_segmentation  # vision_msgs/Detection2DArray
         table_det_msg         = request.table_detection    # vision_msgs/BoundingBox3D
@@ -100,13 +111,19 @@ class SwipeAcrossTheDishesServer(object):
         # Edge Sampler
         cps = EdgeSampler(cam_intr,cam_pos)
 
+        # param for simulation
+        table_size  = np.array([table_center[0] - map_corners[0], table_center[1] - map_corners[2]]) * 2
+        pusher_pose = None
+        slider_pose = []
+        slider_num  = None
+
         # target dish
         masked_depth_image = np.multiply(depth_img, target_segmask)
 
         # Sample the edge points where the dishes can be pushed.
         target_edge = cps.sample(masked_depth_image)
         target_ellipse = Ellipse(target_edge.edge_xyz[:,0], target_edge.edge_xyz[:,1])
-        target_ellipse.resize(self.planner_config["dish_r_margin"], self.planner_config["dish_r_margin"])
+        slider_pose.append(target_ellipse.q)
 
         # Sample the obs edge points where the dishes can be pushed.
         obs_edge_list=[]
@@ -116,8 +133,8 @@ class SwipeAcrossTheDishesServer(object):
         obs_ellipse_list=[]
         for _obs in obs_edge_list:
             _obs_ellipse = Ellipse(_obs.edge_xyz[:,0], _obs.edge_xyz[:,1])
-            _obs_ellipse.resize(self.planner_config["dish_r_margin"], self.planner_config["dish_r_margin"])
             obs_ellipse_list.append(_obs_ellipse)
+            slider_pose.append(_obs_ellipse.q)
         
         # Notice the target dish and obstacles 
         # Target dish
@@ -129,9 +146,9 @@ class SwipeAcrossTheDishesServer(object):
             rospy.loginfo("total obstacle dish num: {0}".format(len(obs_ellipse_list)))
         for _obs in obs_ellipse_list:
             rospy.loginfo("obstacle dish [m]: \t x: {:.3f}, y: {:.3f}".format(_obs.center[0], _obs.center[1]))
-            
+
         # Publish edge of the dishes
-        if self.planner_config["publish_vis_topic"]:
+        # if self.planner_config["publish_vis_topic"]:
             _edge_marker_list = MarkerArray()
             _id = 0
             _edge_marker = Marker()
@@ -179,8 +196,27 @@ class SwipeAcrossTheDishesServer(object):
             self.dish_edge_pub.publish(_edge_marker_list)
             rospy.loginfo("Publish the edge of the dishes as ROS topic.")
             
-        res = GetSwipeDishesPathResponse()   
-        rospy.logwarn('Path generation failed')
+        # ready for simulation
+        
+        slider_pose = np.array(slider_pose)
+        table_center = np.array(table_center)
+        for ellipse in slider_pose:
+            ellipse[0][:2] -= table_center[:2]
+
+        simulation_settings = {"table_size": table_size, "pusher_pose": pusher_pose, "slider_pose": slider_pose, "slider_num": slider_num}
+
+        for _ in range(4):
+            self.sim.reset(simulation_settings)
+            for i in range(400):
+                action = np.random.random(4)
+                state_next, reward, done = self.sim.env.step(action)
+                if done: break
+
+
+        res = GetSweepGraspDishesPathResponse()   
+        res.path = CartesianTrajectory()
+        res.path.points = []
+        rospy.loginfo('Path generation failed\n')
         res.plan_successful = False
         res.gripper_pose = [self.gripper_config["width"]]
         return res
@@ -234,6 +270,24 @@ class SwipeAcrossTheDishesServer(object):
         # return [x_min, x_max, y_min, y_max], tft.quaternion_matrix(orientation)
         return [x_min, x_max, y_min, y_max], [position[0], position[1], position[2]], [x_vector[0:3], y_vector[0:3], z_vector[0:3]], tft.quaternion_matrix(orientation)
 
+    def is_bound_out_point(self, center, ellipse_list, push_angle, push_width, table_center_xy, table_vectors_xy):
+        ''' Check if the dished is out of the table.'''
+        _temp = []
+        for ellipse in ellipse_list:
+            c_vector = ellipse.center - center
+            c_vector = c_vector / np.linalg.norm(c_vector) * push_width
+            rot_matrix = np.array([
+                [np.cos(push_angle), -np.sin(push_angle)],
+                [np.sin(push_angle), np.cos(push_angle)],
+            ])
+            t_vector = rot_matrix @ c_vector + ellipse.center - table_center_xy
+            _x = t_vector @ table_vectors_xy[0][0:2] / np.linalg.norm(table_vectors_xy[0][0:2])
+            _y = t_vector @ table_vectors_xy[1][0:2] / np.linalg.norm(table_vectors_xy[1][0:2])
+            _temp.append([_x + table_center_xy[0],
+                          _y
+                          ])
+        return _temp
+
     def cal_path_height(self, x, y):
         ''' Parse table detection msg to table pose.'''
         
@@ -242,7 +296,7 @@ class SwipeAcrossTheDishesServer(object):
         return _z
 
     def path_failed(self, log:str):
-        res = GetSwipeDishesPathResponse()   
+        res = GetSweepGraspDishesPathResponse()   
         rospy.logwarn('Path generation failed: %s\n', log)
         res.plan_successful = False
         res.gripper_pose = [self.gripper_config["width"]]
@@ -266,6 +320,6 @@ class SwipeAcrossTheDishesServer(object):
 
 if __name__ == '__main__':
     rospy.init_node('stable_push_net_server')
-    server = SwipeAcrossTheDishesServer()
+    server = SweepGraspDishesServer()
     
     rospy.spin()

@@ -14,7 +14,7 @@ from moveit_msgs.msg import CartesianTrajectory
 from geometry_msgs.msg import PoseStamped
 
 # Push path module service client
-from swipe_planner_interface.swipe_planner_interface import GetSwipeDishesPath
+from sweep_grasp_planner_interface.sweep_grasp_planner_interface import GetSwipeDishesPath
 
 # For vizualization
 from cv_bridge import CvBridge
@@ -86,6 +86,7 @@ class SwipeDishExample(object):
     def visualize_example_scene_in_rviz(self):
         
         '''Visualize point cloud & color segmask in rViz'''
+        return
         depth = self.depth_msg2image(self.depth_image)
         self.point_cloud_pub.publish(self.pcd_to_pointcloud2(depth2pcd(depth, np.array(self.camera_info.K).reshape(3,3))))
         self.color_image_pub.publish(self.cv_bridge.cv2_to_imgmsg(self.color_image, encoding = "passthrough"))

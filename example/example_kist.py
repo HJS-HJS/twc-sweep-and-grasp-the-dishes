@@ -14,7 +14,7 @@ from moveit_msgs.msg import CartesianTrajectory
 from geometry_msgs.msg import PoseStamped
 
 # Push path module service client
-from swipe_planner_interface.swipe_planner_interface import GetSwipeDishesPath
+from sweep_grasp_planner_interface.sweep_grasp_planner_interface import GetSwipeDishesPath
 from manipulator_interface.motion_planner import MotionPlanner
 
 # For vizualization

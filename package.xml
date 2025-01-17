@@ -1,15 +1,14 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>swipe_across_the_dishes</name>
+  <name>sweep_and_grasp_the_dishes</name>
   <version>1.0.0</version>
-  <description>The stable_push_net package</description>
+  <description>The sweep_and_grasp_the_dishes package</description>
 
   <maintainer email="jongsoo@g.skku.edu">Jongsoo Han</maintainer>
 
   <license>MIT</license>
 
   <author email="jongsoo@g.skku.edu">Jongsoo Han</author>
-  <author email="jaeseogwon@g.skku.edu">Jaeseog Won</author>
 
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>rospy</build_depend>
