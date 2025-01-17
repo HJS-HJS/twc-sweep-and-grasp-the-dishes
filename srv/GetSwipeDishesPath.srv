@@ -1,0 +1,12 @@
+# Scene information
+vision_msgs/Detection2DArray  dish_segmentation
+vision_msgs/BoundingBox3D     table_detection
+sensor_msgs/Image             depth_image
+sensor_msgs/CameraInfo        camera_info
+geometry_msgs/PoseStamped     camera_pose
+std_msgs/Int32                target_id
+
+---
+moveit_msgs/CartesianTrajectory  path
+bool                             plan_successful
+float32[]                        gripper_pose

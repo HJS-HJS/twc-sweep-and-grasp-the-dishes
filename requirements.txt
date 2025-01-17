@@ -1,0 +1,9 @@
+cv_bridge
+numpy == 1.21.0
+matplotlib
+opencv-python
+pygame
+PyYAML
+rospkg
+scipy
+# torch
