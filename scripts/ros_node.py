@@ -22,10 +22,10 @@ current_file_path = os.path.abspath(__file__)
 current_directory = os.path.dirname(current_file_path)
 sys.path.append(os.path.abspath(current_directory + "/third_party/quasi_static_push/scripts/"))
 
-from utils.dish_simulation import DishSimulation
 from sweep_and_grasp_the_dishes.srv import GetSweepGraspDishesPath, GetSweepGraspDishesPathRequest, GetSweepGraspDishesPathResponse
-from sweep_and_grasp_the_dishes.utils.edge_sampler import EdgeSampler
-from sweep_and_grasp_the_dishes.utils.ellipse import Ellipse
+from utils.dish_simulation import DishSimulation
+from utils.edge_sampler import EdgeSampler
+from utils.ellipse import Ellipse
 
 class SweepGraspDishesServer(object):
     

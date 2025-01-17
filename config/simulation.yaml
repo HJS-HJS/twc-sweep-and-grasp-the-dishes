@@ -1,0 +1,44 @@
+simulator:
+  fps      : 50  # 100 fps
+  sim_step : 100  # Maximun LCP solver step
+  dist_threshold: 5e-2 # Distance to decide whether to calculate parameters
+
+display:
+  WIDTH : 1200
+  HEIGHT: 1200
+  unit:   0.0016 # [m/pixel]
+
+pusher:
+  pusher_num      : 3
+
+  pusher_angle    : 120
+  pusher_distance : 0.04
+  pusher_d_u_limit: 0.185
+  pusher_d_l_limit: 0.04
+  pusher_type     : {"type": "superellipse", "a": 0.015, "b": 0.03, "n": 10}
+
+  pusher_position : [0.0, -1.2]
+  pusher_rotation : 0
+
+  unit_v_speed    : 0.1  # [m/s]
+  unit_r_speed    : 0.15  # [rad/s]
+  unit_w_speed    : 0.03   # [m/s]
+
+sliders:
+  [
+    ## Polygons
+    {"type": "srpolygon",  'q':[-0.5, -0.25, 0.0] ,  "a": 0.15, "k": 6},
+    {"type": "srpolygon",  'q':[-0.25, 1.0, 0.4] ,   "a": 0.1,  "k": 3},
+    {"type": "srpolygon",  'q':[0.35, -0.25, -0.1] , "a": 0.24, "k": 4},
+    {"type": "srpolygon",  'q':[0.5, 0.5, 0.2] ,     "a": 0.15, "k": 5},
+    {"type": "srpolygon",  'q':[0.0, 1.0, 0.0] ,     "a": 0.12, "k": 8},
+  ]
+
+obstacles:
+  [
+  ]
+
+auto:
+  maximun_number : 15
+  minimum_radius : 0.05
+  maximum_radius : 0.125

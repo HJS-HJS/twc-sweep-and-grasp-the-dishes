@@ -41,7 +41,7 @@ class Simulation():
         else: self.visualization = False
 
         ## Get config file
-        with open(os.path.dirname(os.path.abspath(__file__)) + "/../../config/config.yaml") as f:
+        with open(os.path.dirname(os.path.abspath(__file__)) + "/../../config/simulation.yaml") as f:
             self.config = yaml.load(f,Loader=yaml.FullLoader)
 
         # Set patameters
@@ -545,8 +545,8 @@ class Simulation():
         del(self.param)
 
 class DishSimulation():
-    def __init__(self, visualize:str = 'human', state:str = 'image', random_place:bool = True, action_skip:int = 5):
-        self.env = Simulation(visualize = visualize, state = state, random_place = random_place, action_skip = action_skip)
+    def __init__(self, visualize:str = 'human', state:str = 'image', action_skip:int = 5):
+        self.env = Simulation(visualize = visualize, state = state, action_skip = action_skip)
         self._count = 0
         self._pusher_direction = np.array([[1, 1, 1, 1],
                                            [-1, 1, 1, 1],
