@@ -1,4 +1,7 @@
+import os
+import torch
 import numpy as np
+
 class Angle():
     def __init__(self, start, end):
         self.start = start
@@ -54,3 +57,18 @@ class Angle():
         b.resize(offset)
         return b.start - a.end
     
+def load_model(network:torch.nn.Module, save_dir:str, name:str, episode:int):
+    if episode is None:
+        folders = [f for f in os.listdir(save_dir) if os.path.isdir(os.path.join(save_dir, f))]
+        numbered_folders = [int(folder) for folder in folders if folder.isdigit()]
+        episode = max(numbered_folders)
+
+    _save_dir = save_dir + "/" + str(episode) + "/"
+    save_path = os.path.join(_save_dir, f"{str(name)}.pth")
+    if os.path.exists(_save_dir):
+        state_dict = torch.load(save_path)
+        network.load_state_dict(state_dict)
+        print("RL Model loaded successfully")
+    else:
+        print(f"\tNo saved RL model found {save_path}")
+    return network
