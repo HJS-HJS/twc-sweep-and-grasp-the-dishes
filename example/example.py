@@ -58,7 +58,7 @@ class SwipeDishExample(object):
         self.visualize_example_scene_in_rviz()
     
     def init_swipe_planner(self):
-        self.swipe_planner_client = GetSwipeDishesPath()
+        self.swipe_planner_client = GetSweepGraspDishesPath()
         rospy.loginfo('Push planner initialized.')
         
     def get_example_data(self):
