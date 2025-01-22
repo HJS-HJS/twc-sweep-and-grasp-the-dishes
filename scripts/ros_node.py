@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from typing import List, Tuple
 
 import rospy
+import torch
 import tf
 import tf.transformations as tft
 from cv_bridge import CvBridge
@@ -23,9 +24,16 @@ current_directory = os.path.dirname(current_file_path)
 sys.path.append(os.path.abspath(current_directory + "/third_party/quasi_static_push/scripts/"))
 
 from sweep_and_grasp_the_dishes.srv import GetSweepGraspDishesPath, GetSweepGraspDishesPathRequest, GetSweepGraspDishesPathResponse
+from utils.model import ActorNetwork
 from utils.dish_simulation import DishSimulation
 from utils.edge_sampler import EdgeSampler
 from utils.ellipse import Ellipse
+from utils.utils import load_model
+
+device = torch.device('cpu')
+if torch.cuda.is_available():
+    print("CUDA is available")
+    device = torch.device('cuda')
 
 class SweepGraspDishesServer(object):
     
@@ -36,6 +44,17 @@ class SweepGraspDishesServer(object):
         # Get parameters.
         self.planner_config = rospy.get_param("~planner")
         self.gripper_config = rospy.get_param("~gripper")[self.planner_config["gripper"]]
+
+        self.sim = DishSimulation(
+            visualize=None,
+            state="linear",
+            action_skip=8,
+        )
+        current_file_path = os.path.abspath(__file__)
+        current_directory = os.path.dirname(current_file_path)
+        model_path = current_directory + "/../model/SAC"
+
+        self.actor = load_model(ActorNetwork(device).to(device), model_path, "actor", "85")
 
         # Print param to terminal.
         rospy.loginfo("planner config: {}".format(self.planner_config))
@@ -61,12 +80,6 @@ class SweepGraspDishesServer(object):
             self.dish_edge_pub = rospy.Publisher(
                 '/swipe_across_ths_dishes/dish_edge', MarkerArray, queue_size=2)
             
-        self.sim = DishSimulation(
-            visualize='human',
-            state="linear",
-            action_skip=8,
-        )
-
         # Print info message to terminal when push server is ready.
         rospy.loginfo('SweepGraspDishesServer is ready to serve.')
     
@@ -113,9 +126,7 @@ class SweepGraspDishesServer(object):
 
         # param for simulation
         table_size  = np.array([table_center[0] - map_corners[0], table_center[1] - map_corners[2]]) * 2
-        pusher_pose = []
         slider_pose = []
-        slider_num  = []
 
         # target dish
         masked_depth_image = np.multiply(depth_img, target_segmask)
@@ -203,13 +214,16 @@ class SweepGraspDishesServer(object):
         for ellipse in slider_pose:
             ellipse[0][:2] -= table_center[:2]
 
-        simulation_settings = {"table_size": table_size, "pusher_pose": pusher_pose, "slider_pose": slider_pose, "slider_num": slider_num}
-
-        for _ in range(4):
-            self.sim.reset(simulation_settings)
-            for i in range(400):
-                action = np.random.random(4)
-                state_next, reward, done = self.sim.env.step(action)
+        for _ in range(1):
+            state, _ = self.sim.env.reset(table_size=table_size,
+                                       pusher_pose=None,
+                                       slider_pose=slider_pose,
+                                       slider_num=None,
+                                       )
+            state, _ , _ = state
+            for i in range(300):
+                state, _, done = self.sim.env.step(self.actor(state))
+                print(i)
                 if done: break
 
 
