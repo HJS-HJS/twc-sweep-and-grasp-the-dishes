@@ -2,5 +2,6 @@
   <arg name="node_name" default="sweep_grasp_planner_ros"/>
   <node name="$(arg node_name)" pkg="sweep_and_grasp_the_dishes" type="ros_node.py" output="screen" >
     <rosparam command="load" file="$(find sweep_and_grasp_the_dishes)/config/config.yaml" />
+    <rosparam command="load" file="$(find sweep_and_grasp_the_dishes)/config/simulation.yaml" />
   </node>
 </launch>

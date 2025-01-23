@@ -44,17 +44,20 @@ class SweepGraspDishesServer(object):
         # Get parameters.
         self.planner_config = rospy.get_param("~planner")
         self.gripper_config = rospy.get_param("~gripper")[self.planner_config["gripper"]]
+        self.simulat_config = rospy.get_param("~simulator")
 
         self.sim = DishSimulation(
             visualize=None,
             state="linear",
-            action_skip=8,
+            action_skip=self.simulat_config["frame_skip"],
         )
         current_file_path = os.path.abspath(__file__)
         current_directory = os.path.dirname(current_file_path)
         model_path = current_directory + "/../model/SAC"
+        model_name = "1620"
+        self.start_point = np.array(self.planner_config["start_point"])
 
-        self.actor = load_model(ActorNetwork(device).to(device), model_path, "actor", "85")
+        self.actor = load_model(ActorNetwork(device).to(device), model_path, "actor", model_name)
 
         # Print param to terminal.
         rospy.loginfo("planner config: {}".format(self.planner_config))
@@ -157,82 +160,125 @@ class SweepGraspDishesServer(object):
             rospy.loginfo("total obstacle dish num: {0}".format(len(obs_ellipse_list)))
         for _obs in obs_ellipse_list:
             rospy.loginfo("obstacle dish [m]: \t x: {:.3f}, y: {:.3f}".format(_obs.center[0], _obs.center[1]))
-
-        # # Publish edge of the dishes
-        # if self.planner_config["publish_vis_topic"]:
-        #     _edge_marker_list = MarkerArray()
-        #     _id = 0
-        #     _edge_marker = Marker()
-        #     _edge_marker.header.frame_id = camera_pose_msg.header.frame_id
-        #     _edge_marker.ns = "dish_edge_marker"
-        #     _edge_marker.id = 0
-        #     _edge_marker.type = Marker.LINE_STRIP
-        #     _edge_marker.pose.position.x = 0
-        #     _edge_marker.pose.position.y = 0
-        #     _edge_marker.pose.position.z = 0
-        #     _edge_marker.pose.orientation.x = 0
-        #     _edge_marker.pose.orientation.y = 0
-        #     _edge_marker.pose.orientation.z = 0
-        #     _edge_marker.pose.orientation.w = 1
-        #     _edge_marker.scale.x = 0.01
-        #     _edge_marker.scale.y = 0.01
-        #     _edge_marker.scale.z = 0.01
-        #     _edge_marker.color.a = 1.0
-        #     _edge_marker.color.r = 1.0
-        #     _edge_marker.color.g = 1.0
-        #     _edge_marker.color.b = 0.0
-        #     _edge_marker.points = []
-        #     # target dish
-        #     _edge = copy.deepcopy(_edge_marker)
-        #     for _point in target_ellipse.get_ellipse_pts(npts=20).T:
-        #         _p = Point()
-        #         _p.x, _p.y, _p.z = _point[0], _point[1], table_center[2] + 0.1
-        #         _edge.points.append(_p)
-        #     _edge.color.r = 0.0
-        #     _edge.color.g = 0.0
-        #     _edge.color.b = 1.0
-        #     _edge.id = _id
-        #     _id += 1
-        #     _edge_marker_list.markers.append(_edge)
-        #     # Obstacle dish
-        #     for _dish in obs_ellipse_list:
-        #         _edge = copy.deepcopy(_edge_marker)
-        #         for _point in _dish.get_ellipse_pts(npts=20).T:
-        #             _p = Point()
-        #             _p.x, _p.y, _p.z = _point[0], _point[1], table_center[2] + 0.1
-        #             _edge.points.append(_p)
-        #         _edge.id = _id
-        #         _id += 1
-        #         _edge_marker_list.markers.append(_edge)
-        #     self.dish_edge_pub.publish(_edge_marker_list)
-        #     rospy.loginfo("Publish the edge of the dishes as ROS topic.")
-            
-        # ready for simulation
         
         slider_pose = np.array(slider_pose)
         table_center = np.array(table_center)
         for ellipse in slider_pose:
             ellipse[0][:2] -= table_center[:2]
+        
+        pusher_pose = copy.deepcopy(self.start_point) - table_center[:2]
+        success = False
+        for i in range(len(pusher_pose)):
+            if success: break
+            rospy.loginfo("generating path #{0}".format(i))
+            path = []
+            state = self.sim.reset(
+                {
+                "table_size":table_size, 
+                "pusher_pose":np.hstack((pusher_pose[i,0], pusher_pose[i, 1], [0, 0.185])),
+                "slider_pose":slider_pose, 
+                "slider_num":None
+                })
+            image_start = self.sim.env.get_image()
+            
+            for step in range(1, 300):
+                state, reward, done = self.sim.env.step(self.actor(state))
+                path.append(self.sim.env.gripper_pose())
+                if done:
+                    after_ellipse_list = self.sim.env.ellipse_list()
+                    if reward > 0: success = True
+                    image_end = self.sim.env.get_image()
+                    break
 
-        for _ in range(1):
-            state, _ = self.sim.env.reset(table_size=table_size,
-                                       pusher_pose=None,
-                                       slider_pose=slider_pose,
-                                       slider_num=None,
-                                       )
-            state, _ , _ = state
-            for i in range(300):
-                state, _, done = self.sim.env.step(self.actor(state))
-                print(i)
-                if done: break
+        path = np.array(path)
+        path[:,:2] += table_center[:2]
+        _spent_time = rospy.Duration.from_sec(step * self.simulat_config["frame_skip"] / self.simulat_config["fps"])
 
+        # vis
+        if self.planner_config["visualize"]:
+            origin_target_ellipse = Ellipse(target_edge.edge_xyz[:,0], target_edge.edge_xyz[:,1])
+            
+            fig = plt.figure(figsize=(10,10))
+            ax1 = fig.add_subplot(221)
+            ax2 = fig.add_subplot(222)
+            ax3 = fig.add_subplot(223)
+            ax4 = fig.add_subplot(224)
+            ax1.grid(True)
+            
+            # Draw table
+            ax1.set_xlim([map_corners[0] - 0.1, map_corners[1] + 0.1])
+            ax1.set_ylim([map_corners[2] - 0.1, map_corners[3] + 0.1])
+
+            # Draw target
+            x, y = origin_target_ellipse.get_ellipse_pts()
+            ax1.plot(x, y, color='green')
+
+            # Draw obs
+            for obs in obs_ellipse_list:
+                x, y = obs.get_ellipse_pts()
+                ax1.plot(x, y, color='midnightblue')
+            for obs in after_ellipse_list[1:]:
+                x, y = obs.points()
+                # ax1.fill_between(x + table_center[0], y + table_center[1], color='blue')
+                ax1.plot(x + table_center[0], y + table_center[1], color='blue', linewidth=8)
+                ax1.scatter(obs.q[0] + table_center[0], obs.q[1] + table_center[1])
+
+            x, y = after_ellipse_list[0].points()
+            # ax1.fill_between(x + table_center[0], y + table_center[1], color='lime')
+            ax1.plot(x + table_center[0], y + table_center[1], color='lime', linewidth=8)
+            ax1.scatter(after_ellipse_list[0].q[0] + table_center[0], after_ellipse_list[0].q[1] + table_center[1])
+
+            # Draw path
+            ax1.plot(path[:,0], path[:,1], 'red', linewidth=4)
+
+            ax1.set_aspect('equal')
+            ax3.imshow(image_start)
+            ax4.imshow(image_end)
+                
+            plt.show()
+
+        path_msg = CartesianTrajectory()
+        path_msg.header.stamp = rospy.Time.now()
+        path_msg.header.frame_id = camera_pose_msg.header.frame_id # base link of doosan m1013
+        path_msg.tracked_frame = "end_effector" # end effector of gripper
+        path_msg.points =[]
+        
+        eef_path = PoseArray()
+        eef_path.header.stamp = rospy.Time.now()
+        eef_path.header.frame_id = camera_pose_msg.header.frame_id # base link of doosan m1013
+
+        for point in path:
+            _pose = Pose()
+            # finger position x, y
+            _pose.position.x, _pose.position.y = point[0], point[1]
+            # finger position z along table pose
+            _pose.position.z = self.planner_config['height'] + self.cal_path_height(point[0], point[1])
+            # finger orientation matrix
+            path_rot_matrix = np.dot(rot_matrix, tft.euler_matrix(point[2] + np.deg2rad(self.gripper_config["z_angle"]), 0, 0, axes='rzxy'))
+            # finger orientation x, y, z, w
+            _pose.orientation.x, _pose.orientation.y, _pose.orientation.z, _pose.orientation.w = tft.quaternion_from_matrix(path_rot_matrix)
+            eef_path.poses.append(_pose)
+            
+            _point = CartesianTrajectoryPoint()
+            # whole spent time
+            _point.time_from_start = _spent_time
+            # point position
+            _point.point.pose.position = _pose.position
+            _point.point.pose.position.z += self.gripper_config['height']
+            # apply gripper tilt angle (table angle, gripper push tilt angle)
+            path_rot_matrix = np.dot(rot_matrix, tft.euler_matrix(point[2] + np.deg2rad(self.gripper_config["z_angle"] + self.gripper_config["finger_angle"]), -np.pi, 0, axes='rzxy'))
+            # gripper orientation
+            _point.point.pose.orientation.x, _point.point.pose.orientation.y, _point.point.pose.orientation.z, _point.point.pose.orientation.w = tft.quaternion_from_matrix(path_rot_matrix)
+            path_msg.points.append(_point)
+            
+        rospy.loginfo("Swipe ROS path generation finished")
 
         res = GetSweepGraspDishesPathResponse()   
-        res.path = CartesianTrajectory()
-        res.path.points = []
-        rospy.loginfo('Path generation failed\n')
-        res.plan_successful = False
+        res.path = path_msg
+        res.plan_successful = success
         res.gripper_pose = [self.gripper_config["width"]]
+        if success: rospy.loginfo('Path generation successed\n')
+        else: rospy.loginfo('Path generation failed\n')
         return res
 
     def parse_dish_segmentation_msg(self, dish_segmentation_msg, target_id:int):

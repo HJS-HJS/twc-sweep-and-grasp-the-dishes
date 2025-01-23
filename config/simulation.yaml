@@ -2,6 +2,7 @@ simulator:
   fps      : 50  # 100 fps
   sim_step : 100  # Maximun LCP solver step
   dist_threshold: 5e-2 # Distance to decide whether to calculate parameters
+  frame_skip: 8
 
 display:
   WIDTH : 1200
