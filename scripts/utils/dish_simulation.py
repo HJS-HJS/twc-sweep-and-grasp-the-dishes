@@ -1,473 +1,414 @@
-import os
 import sys
-import copy
-import random
+import os
+import time
 import yaml
 import numpy as np
-import pygame
+import random
+import copy
 from typing import List
 
-from third_party.quasi_static_push.scripts.utils.diagram         import Ellipse
-from third_party.quasi_static_push.scripts.utils.object_obstacle import ObjectObstacle
-from third_party.quasi_static_push.scripts.utils.object_pusher   import ObjectPusher
-from third_party.quasi_static_push.scripts.utils.object_slider   import ObjectSlider
-from third_party.quasi_static_push.scripts.utils.param_function  import ParamFunction
-from third_party.quasi_static_push.scripts.utils.quasi_state_sim import QuasiStateSim
-from third_party.quasi_static_push.scripts.utils.color import COLOR
+base_dir = os.path.dirname(os.path.abspath(__file__))
+so_file_path = os.path.join(base_dir, "../../cpp")
+sys.path.append(os.path.abspath(so_file_path))
+
+from quasi_static_push import SimulationViewer, SimulationResult, SimulationDoneReason, GripperMotion, Player
 
 class Simulation():
-    def __init__(self, visualize:str = 'human', state:str = 'image', random_place:bool = True, action_skip:int = 5):
+    def __init__(self, visualize:str = 'human', state:str = 'image', action_skip:int = 5, record:bool = False, save_dir:str = "recordings"):
         """
         state : image, information
         """
         # Get initial param
         self.state = state
-        self.random = random_place
-        self.action_skip = action_skip
-        self.gripper_on = False
 
-        # Set pygame display
-        if visualize == "human":
-            print("[Info] simulator is visulaized")
-            os.environ["SDL_VIDEODRIVER"] = "x11"
-        elif visualize is None:
-            print("[Info] simulator is NOT visulaized")
-            os.environ["SDL_VIDEODRIVER"] = "dummy"
-        else:
-            print("[Info] simulator is visulaized")
-        
-        if (visualize == "human") or (state != "linear"):
-            self.visualization = True
-        else: self.visualization = False
+        # Set display visuality
+        if visualize == "human": visualize = True
+        elif visualize is None: visualize = False
+        else: visualize = False
 
         ## Get config file
         with open(os.path.dirname(os.path.abspath(__file__)) + "/../../config/simulation.yaml") as f:
             self.config = yaml.load(f,Loader=yaml.FullLoader)
 
         # Set patameters
-        self.display_size = np.array([self.config["display"]["WIDTH"], self.config["display"]["HEIGHT"] ]) # Get pygame display size parameter from config.yaml
-        self.display_center = self.display_size/2                                                          # Get center pixel of pygame display
+        self.display_size = np.array([self.config["display"]["WIDTH"], self.config["display"]["HEIGHT"] ]) # Get display size parameter from config.yaml
 
         ## Set parameters
         # Set pixel unit
         self.unit = self.config["display"]["unit"] #[m/pixel]
 
         # Set pusher
-        pusher_num      = self.config["pusher"]["pusher_num"]
-        pusher_angle    = np.deg2rad(self.config["pusher"]["pusher_angle"])
-        pusher_type     = self.config["pusher"]["pusher_type"]
-        pusher_distance = self.config["pusher"]["pusher_distance"]
-        self.pusher_d_u_limit= self.config["pusher"]["pusher_d_u_limit"]
-        self.pusher_d_l_limit= self.config["pusher"]["pusher_d_l_limit"] 
-
-        pusher_position = self.config["pusher"]["pusher_position"]
-        pusher_rotation = np.deg2rad(self.config["pusher"]["pusher_rotation"])
+        _pusher_type = self.config["pusher"]["pusher_type"]
 
         # Set pusher unit speed
-        unit_v_speed = self.config["pusher"]["unit_v_speed"]  # [m/s]
-        unit_r_speed = self.config["pusher"]["unit_r_speed"]  # [rad/s]
-        unit_w_speed = self.config["pusher"]["unit_w_speed"]  # [m/s]
-        self.unit_speed = [unit_v_speed, unit_v_speed, unit_r_speed, unit_w_speed]
+        unit_v_speed = self.config["pusher"]["unit_v_speed"] # [m/s]
+        unit_r_speed = self.config["pusher"]["unit_r_speed"] # [rad/s]
+        unit_w_speed = self.config["pusher"]["unit_w_speed"] # [m/s]
+        self.unit_speed = [unit_v_speed, unit_v_speed, unit_r_speed, unit_w_speed, int(1)]
+
+        self.pusher_width_limit = np.array([self.config["pusher"]["pusher_d_u_limit"], self.config["pusher"]["pusher_d_l_limit"]])
 
         # Set slider 
         self.slider_max_num = self.config["auto"]["maximun_number"] # Get sliders number
         self.min_r = self.config["auto"]["minimum_radius"]
         self.max_r = self.config["auto"]["maximum_radius"]
 
-        # Set simulate param
-        _fps = self.config["simulator"]["fps"]      # Get simulator fps from config.yaml
-        self.frame = 1 / _fps                       # 1 frame = 1/fps
-        sim_step = self.config["simulator"]["sim_step"] # Maximun LCP solver step
-        self.dist_threshold = float(self.config["simulator"]["dist_threshold"]) # Distance to decide whether to calculate parameters
+        # Set simulation param
+        self.fps = self.config["simulator"]["fps"]
+        self.action_skip = action_skip
 
-
-        ## Generate objects
-        # Generate pushers
-        self.pushers = ObjectPusher(pusher_num, pusher_angle, pusher_type, pusher_distance, self.pusher_d_u_limit, self.pusher_d_l_limit, pusher_position[0], pusher_position[1], pusher_rotation)
-
-        # Generate quasi-static simulation class
-        self.simulator = QuasiStateSim(sim_step)
+        self.pusher_input = [
+            self.config["pusher"]["pusher_num"], self.config["pusher"]["pusher_angle"], _pusher_type["type"], 
+            {"a": _pusher_type["a"], "b": _pusher_type["b"], "n": _pusher_type["n"]}, 
+            self.config["pusher"]["pusher_distance"], self.pusher_width_limit[0], self.pusher_width_limit[1],
+            0.0, 0.0, 0.0
+        ]
 
         self.action_limit = np.array([
             [-1., 1.],
             [-1., 1.],
             [-1., 1.],
             [-1., 1.],
+            [0, 1],
         ])
-        self.param = None
-        self.state_next = None
 
         self.action_space = np.zeros_like(self.unit_speed)
-        if state == "image" :   self.observation_space = np.zeros((self.display_size[0],self.display_size[1],3))
-        elif state == "gray":   self.observation_space = np.zeros((self.display_size[0],self.display_size[1],1))
-        elif state == "linear": self.observation_space = np.zeros(2 + 4 + 5), np.zeros((2, 5))
-    
+        if state == "image" :   self.observation_space = np.zeros((self.config["display"]["WIDTH"],self.config["display"]["HEIGHT"],3))
+        elif state == "gray":   self.observation_space = np.zeros((self.config["display"]["WIDTH"],self.config["display"]["HEIGHT"],1))
+        elif state == "linear": self.observation_space = np.zeros(1 + 2 + 4 + 5), np.zeros((2, 5))
 
+        self.simulator = SimulationViewer(
+            window_width = self.display_size[0],
+            window_height = self.display_size[1],
+            scale = 1 / self.unit,
+            headless = not visualize,
+            gripper_movement = GripperMotion.MOVE_TO_TARGET,
+            # gripper_movement = GripperMotion.MOVE_XY,
+            # gripper_movement = GripperMotion.MOVE_FORWARD,
+            frame_rate = self.fps,
+            frame_skip = self.action_skip,
+            # grid = False,
+            grid = True,
+            recording_enabled = record,
+            recording_path = save_dir,
+            show_closest_point = False,
+            )
+        
     def reset(self, 
               table_size:List[float] = None,
-              pusher_pose:List[float] = None,
-              slider_pose:List[List[float]] = None,
+              slider_state:List[List[float]] = None,
               slider_num:int=None,
               ):
-        del self.param
-        
-        # Table setting
-        if table_size is None:
-            _table_limit_width  = random.randint(self.display_size[0] // 3, int(self.display_size[0] * 0.8))
-            _table_limit_height = random.randint(self.display_size[1] // 3, int(self.display_size[1] * 0.8))
-            _table_limit = np.array([_table_limit_width, _table_limit_height])
-            table_size = _table_limit * self.unit
-        else:
-            _table_limit = (np.array(table_size) / self.unit).astype(int)
-        self.table_limit = _table_limit * self.unit / 2
+                        
+            # Table setting
+            if table_size is None:
+                _table_limit_width  = random.randint(int(self.display_size[0] * 0.3), int(self.display_size[0] * 0.6))
+                _table_limit_height = random.randint(int(self.display_size[1] * 0.3), int(self.display_size[1] * 0.6))
+                _table_limit = np.array([_table_limit_width, _table_limit_height])
+                table_size = _table_limit * self.unit
+            else:
+                _table_limit = (np.array(table_size) / self.unit).astype(int)
+            self.table_limit = _table_limit * self.unit / 2
 
-        # Slider setting
-        _sliders = ObjectSlider()
-        if slider_pose is None:
-            slider_pose = []
-            _slider_num = random.randint(1, self.slider_max_num) if slider_num is None else np.clip(slider_num, 1, 15)
-            points, radius = self.generate_spawn_points(_slider_num)
-            for point, _r in zip(points, radius):
-                a = np.clip(random.uniform(0.8, 1.0) * _r, a_min=self.min_r, a_max=_r)
-                b = np.clip(random.uniform(0.75, 1.25) * a, a_min=self.min_r, a_max=_r)
-                r = random.uniform(0, np.pi * 2)
-                _sliders.append(Ellipse(np.hstack((point,[r])), a, b))
-                slider_pose.append([np.hstack((point,[r])), a, b])
-        else:
-            for _param in slider_pose:
-                q,a,b = _param
-                _sliders.append(Ellipse(q,a,b))
-        slider_num = len(_sliders)
-        
-        # Pusher setting
-        if pusher_pose is None:
-            # Generate random position
-            _q = np.sign(_sliders[0].q[0:2]) * 0.85 * self.display_size / 2 * self.unit
-            _q = [_q[0], _q[1], 0., self.pusher_d_u_limit]
-            pusher_pose = _q
-        else:
-            _q = pusher_pose
-        # Initialize pusher position and velocity
-        self.pushers.apply_q(_q)
-        self.pushers.apply_v([0., 0., 0., 0.])
+            # Slider setting
+            if slider_state is None:
+                slider_inputs = []
+                _slider_num = random.randint(1, self.slider_max_num) if slider_num is None else np.clip(slider_num, 1, 15)
+                points, radius = self.generate_spawn_points(_slider_num)
+                for point, _r in zip(points, radius):
+                    a = np.clip(random.uniform(0.8, 1.0) * _r, a_min=self.min_r, a_max=_r)
+                    b = np.clip(random.uniform(0.75, 1.25) * a, a_min=self.min_r, a_max=_r)
+                    r = random.uniform(0, np.pi * 2)
+                    slider_inputs.append(("ellipse", [point[0], point[1], r, a, b]))
+            else:
+                slider_inputs = []
+                # print(slider_inputs)
+                for slider in slider_state:
+                    # print(slider)
+                    if len(slider) == 4: slider_inputs.append(("circle", [slider[0], slider[1], slider[2], slider[3]]))
+                    else               : slider_inputs.append(("ellipse",[slider[0], slider[1], slider[2], slider[3], slider[4]]))
+            slider_num = len(slider_inputs)
+            
+            # Initial pusher pose
+            self.pusher_input[4] = random.uniform(self.pusher_input[5], self.pusher_input[6])    # width
+            self.pusher_input[7] = 0   # x
+            self.pusher_input[8] = 0   # y
+            self.pusher_input[9] = 0   # w
 
-        # Dummy object setting
-        _obstacles = ObjectObstacle()
+            self.state_prev = None
 
+            self.simulator.reset(
+                slider_inputs = slider_inputs,
+                pusher_input = tuple(self.pusher_input),
+                newtableWidth = self.table_limit[0] * 2,
+                newtableHeight = self.table_limit[1] * 2,
+            )
 
-        ## Set pygame display settings
-        # Initialize pygame
-        pygame.init()                                       # Initialize pygame
-        pygame.display.set_caption("Quasi-static pushing")  # Set pygame display window name
-        self.screen = pygame.display.set_mode((self.display_size[0], self.display_size[1]))   # Set pygame display size
-        self.backgound = self.create_background_surface(_table_limit, grid=False) # Generate pygame background surface
+            return self.step([0.])
 
-        # Generate pygame object surfaces
-        for pusher in self.pushers: pusher.polygon = self.create_polygon_surface(pusher.torch_points.cpu().numpy().T, COLOR["RED"]) # Generate pygame pushers surface
-        for slider in _sliders[1:]: slider.polygon = self.create_polygon_surface(slider.torch_points.cpu().numpy().T, COLOR["BLUE"]) # Generate pygame sliders surface
-        _sliders[0].polygon                        = self.create_polygon_surface(_sliders[0].torch_points.cpu().numpy().T, COLOR["GREEN"]) # Generate pygame sliders surface
-        self.pusher_bead                           = self.create_bead_surface()
+    def image_without_gripper(self):
+        self.simulator.renderViewer_(False)
+        return self.simulator.getImageState()
 
+    def step(self, action, mode:int = 1):
+        if(len(action) == 3): action = np.hstack((action, 1))
 
-        # Quasi-static simulation class
-        # Generate parameter functions
-        self.param = ParamFunction(_sliders,
-                                   self.pushers, 
-                                   _obstacles, 
-                                   self.dist_threshold,
-                                   )
-        
-        self._simulate_once(action=[0., 0., 0., 0.], repeat=1)
-        return self.generate_result(), {"table_size":table_size, "pusher_pose":pusher_pose, "slider_pose":slider_pose, "slider_num":slider_num}
+        if len(action) == 1:
+            state_curr = self.simulator.run([0., 0., 0. ,0., 0.])
+            mode = 0
+        elif mode == 0:
+            if(len(action) != 4): print("Invalid position size")
+            action = np.clip(action, self.action_limit[:4, 0], self.action_limit[:4, 1])
+            action[:2] *= self.display_size / 2 * self.unit
+            action[2] *= np.pi / 3
+            action[3] = self.pusher_width_limit[1] + (action[3] / 2 + 0.5) * (self.pusher_width_limit[0] - self.pusher_width_limit[1])
+            self.simulator.applyGripperPosition(action)
 
-    def step(self, action):
-        """
-        action: 
-        """
-        success, phi = self._simulate_once(action=action, repeat=self.action_skip)
+            state_curr = self.simulator.run([0., 0., 0., 0., 1])
 
-        # Update pygame display
-        self._visualize_update()
-        _n_pusher = len(self.param.pushers)
-        _n_slider = len(self.param.sliders)
-        return self.generate_result(success, target_phi=phi[:_n_pusher], obs_phi=phi[_n_pusher:_n_pusher*_n_slider])
+        elif mode == 1:
+            if(len(action) != 4): print("Invalid action space")
+            
+            action = np.clip(action, self.action_limit[:4, 0], self.action_limit[:4, 1])
+            action *= self.unit_speed[:4]
+            
+            state_curr = self.simulator.run(np.hstack((action, 1)))
+
+        time.sleep(0.01)
+
+        result = self.get_results(self.state_prev, state_curr, mode)
+        self.state_prev = state_curr
+
+        return result
     
-    def _visualize_update(self, vis = False):
-        if self.visualization or vis:
-            # Bliting background
-            self.screen.blit(self.backgound, (0, 0))
-            # Bliting sliders
-            for slider in self.param.sliders:
-                _center = slider.q
-                _surface = slider.surface([
-                    int(_center[0]/self.unit + self.display_center[0]), 
-                    int(-_center[1]/self.unit + self.display_center[1]), 
-                    _center[2]
-                    ])
-                self.screen.blit(_surface[0], _surface[1])
-            # Bliting pushers
-            for pusher in self.param.pushers:
-                _center = pusher.q
-                _surface = pusher.surface([
-                    int(_center[0]/self.unit + self.display_center[0]), 
-                    int(-_center[1]/self.unit + self.display_center[1]), 
-                    _center[2]
-                    ])
-                self.screen.blit(_surface[0], _surface[1])
-            # Show updated pygame display
-            _q = (int(self.param.pushers.q[0] / self.unit + self.display_center[0] - 16),
-                  int(-self.param.pushers.q[1] / self.unit + self.display_center[1] - 16))
-            self.screen.blit(self.pusher_bead, _q)
-            pygame.display.flip()
-            return
-        else: 
-            return
-
-    def get_image(self):
-        self._visualize_update(vis=True)
-        surface = pygame.display.get_surface()
-        return pygame.surfarray.array3d(pygame.transform.rotate(pygame.transform.flip(surface, False, True), -90))
-
-    def _simulate_once(self, action, repeat:int = 1):
-        if(len(action) != 4): print("Invalid action space")
-        _fail_count = 0
-        _fail_count2 = 0
-
-        # Limit pusher speed
-        action = np.clip(action, self.action_limit[:, 0], self.action_limit[:, 1])
-        action *= self.unit_speed
-
-        for _ in range(repeat):
-            # Update parameters for quasi-state simulation
-            self.param.update_param()
-            # Get parameters for simulations
-            _qs, _qp, _phi, _JNS, _JNP, _JTS, _JTP, _mu, _A, _B = self.param.get_simulate_param()
-            if not self.gripper_on:
-                if np.min(_phi[:len(self.param.pushers) * len(self.param.sliders)]) < -0.001: 
-                    success = False
-                    break
-            self.gripper_on = True
-            _vec = self.param.sliders[0].q[:2] - self.param.pushers.q[:2]
-            _vec = np.arctan2(_vec[1], _vec[0]) - np.pi / 2
-            _rot = np.array([
-                [-np.sin(_vec), -np.cos(_vec)],
-                [ np.cos(_vec), -np.sin(_vec)]
-                ])
-            # Run quasi-static simulator
-            _action = action[:4] + random.choice([1., 0.5, -0.5, -1.]) * 1e-6
-            _action[:2] = _rot@_action[:2]
-            qs, qp, success = self.simulator.run(
-                u_input = _action * self.frame,
-                qs  = _qs,
-                qp  = _qp,
-                phi = _phi,
-                JNS = _JNS,
-                JNP = _JNP,
-                JTS = _JTS,
-                JTP = _JTP,
-                mu  = _mu,
-                A   = _A,
-                B   = _B,
-                perfect_u_control = False
-                )
-
-            ## Update simulation results
-            if success:
-                self.param.sliders.apply_v((qs - _qs) / self.frame) # Update slider velocity
-                self.param.sliders.apply_q(qs)                      # Update slider position
-                qp[:2] = np.clip(qp[:2], -self.display_center * 0.85 * self.unit + self.param.pushers.q[3] / 3, self.display_center * 0.85 * self.unit - self.param.pushers.q[3] / 3)
-                self.param.pushers.apply_v((qp - _qp) / self.frame) # Update pusher velocity
-                self.param.pushers.apply_q(qp)                      # Update pusher position
-            else: 
-                _fail_count += 1
-        
-        if _fail_count != 0: print("\t\trecover pusher input ", _fail_count)
-        for _ in range(_fail_count * 12):
-            # Update parameters for quasi-state simulation
-            self.param.update_param()
-            # Get parameters for simulations
-            _qs, _qp, _phi, _JNS, _JNP, _JTS, _JTP, _mu, _A, _B = self.param.get_simulate_param()
-            if not self.gripper_on:
-                if np.min(_phi[:len(self.param.pushers) * len(self.param.sliders)]) < -0.001: 
-                    success = False
-                    break
-            self.gripper_on = True
-            _vec = self.param.sliders[0].q[:2] - self.param.pushers.q[:2]
-            _vec = np.arctan2(_vec[1], _vec[0]) - np.pi / 2
-            _rot = np.array([
-                [-np.sin(_vec), -np.cos(_vec)],
-                [ np.cos(_vec), -np.sin(_vec)]
-                ])
-            # Run quasi-static simulator
-            _action = action[:4] + random.choice([1., 0.5, -0.5, -1.]) * 1e-6
-            _action[:2] = _rot@_action[:2]
-            qs, qp, success = self.simulator.run(
-                u_input = _action * self.frame / 12,
-                qs  = _qs,
-                qp  = _qp,
-                phi = _phi,
-                JNS = _JNS,
-                JNP = _JNP,
-                JTS = _JTS,
-                JTP = _JTP,
-                mu  = _mu,
-                A   = _A,
-                B   = _B,
-                perfect_u_control = False
-                )
-
-            ## Update simulation results
-            if success:
-                self.param.sliders.apply_v((qs - _qs) / self.frame) # Update slider velocity
-                self.param.sliders.apply_q(qs)                      # Update slider position
-                qp[:2] = np.clip(qp[:2], -self.display_center * 0.85 * self.unit + self.param.pushers.q[3] / 3, self.display_center * 0.85 * self.unit - self.param.pushers.q[3] / 3)
-                self.param.pushers.apply_v((qp - _qp) / self.frame) # Update pusher velocity
-                self.param.pushers.apply_q(qp)                      # Update pusher position
-            else: 
-                _fail_count2 += 1
-        
-        if _fail_count2 != 0: print("\t\t\tfailed ", _fail_count2) 
-        
-        if _fail_count2 > 12:
-            success = False
-        else: success = True
-
-        return success, _phi
-
-    def generate_result(self, success:bool = True, target_phi = [10., 10., 10.], obs_phi = [10.,]):
-        """
-        state, reward, done
-        """
-        done = not success
-
-        ## state
-        if self.state == 'image':
-            # image 
-            surface = pygame.display.get_surface()
-            state = pygame.surfarray.array3d(surface)
-        elif self.state == 'gray':
-            # image 
-            surface = pygame.display.get_surface()
-            img = pygame.surfarray.array3d(surface)
-            gray_img = np.dot(img[..., :], [0.299, 0.587, 0.114])
-            state = np.expand_dims(gray_img, axis=2)
+    def get_results(self, state_prev: SimulationResult = None, state_curr: SimulationResult = None, mode:int = 0):
+        # State
+        # width = self.display_size * self.unit / 2
+        _table = ((self.table_limit - 0.25) / 0.25) * 2 - 1
+        _pusher = copy.deepcopy(state_curr.pusher_state)
+        if len(state_curr.slider_state) == 0:
+            _sliders = copy.deepcopy(np.array(state_prev.slider_state))
         else:
-            # Linear
-            # Table size    2 (x,y) [m]
-            # Pusher pose   4 (x,y,r,width)
-            # target data   5 (x,y,r,a,b)
-            # obstacle data 5 (x,y,r,a,b) * N (max 15)
-            _table   = copy.deepcopy(self.table_limit)
-            _pusher  = copy.deepcopy(self.param.qp)
-            _sliders = np.zeros(len(self.param.sliders)*5)
+            _sliders = copy.deepcopy(np.array(state_curr.slider_state))
 
-            for idx in range(len(self.param.sliders)):
-                _slider = self.param.sliders[idx]
-                _sliders[5*idx:5*idx+5] = np.hstack((_slider.q, _slider.a, _slider.b))
+        _pusher_width = copy.deepcopy(_pusher[3])
+        _pusher[3] = (_pusher[3] - self.pusher_width_limit[1]) / (self.pusher_width_limit[0] - self.pusher_width_limit[1]) * 2 - 1
 
-            # Normalize
-            # _pusher[2]     = ((_pusher[2]     + np.pi) % (2 * np.pi)) / np.pi - 1
-            _vec = self.param.sliders[0].q[:2] - _pusher[:2]
-            _pusher[0] = np.linalg.norm(_vec)
-            _pusher[1] = np.arctan2(_vec[1], _vec[0]) / np.pi
-            _pusher[2]     = ((_pusher[2] * 3 / 2) % (np.pi)) / np.pi
-            _pusher[3]     = (_pusher[3] - self.pusher_d_l_limit) / (self.pusher_d_u_limit - self.pusher_d_l_limit)*2 - 1
-            _sliders[0::5] /= _table[0]
-            _sliders[1::5] /= _table[1]
-            _sliders[2::5] = ((_sliders[2::5] + np.pi) % (2 * np.pi)) / np.pi - 1
+        _sliders_theta_sin = np.sin(_sliders[:,2])
+        _sliders_theta_cos = np.cos(_sliders[:,2])
+        _sliders[:,3:5] = (_sliders[:,3:5] - self.min_r) / (self.max_r - self.min_r) * 2 - 1
 
-            state1 = np.hstack((_table, _pusher, _sliders[:5]))
-            state2 = _sliders[5:].reshape(-1,5)
-            if len(state2) < 2:
-                state2 = np.vstack((state2, np.zeros((2 - len(state2), 5))))
-            state = state1, state2
+        fingers = np.array([
+            [_pusher[0] +  np.cos(_pusher[2] + np.pi / 6) * _pusher_width,
+             _pusher[1] +  np.sin(_pusher[2] + np.pi / 6) * _pusher_width],
+            [_pusher[0] +  np.cos(_pusher[2] + np.pi / 6 + np.pi * 2 / 3) * _pusher_width,
+             _pusher[1] +  np.sin(_pusher[2] + np.pi / 6 + np.pi * 2 / 3) * _pusher_width],
+            [_pusher[0] +  np.cos(_pusher[2] + np.pi / 6 + np.pi * 4 / 3) * _pusher_width,
+             _pusher[1] +  np.sin(_pusher[2] + np.pi / 6 + np.pi * 4 / 3) * _pusher_width],
+        ])
 
-        # slider pose
-        _slider_q = self.param.sliders.q.reshape(-1,3)[:,0:2]
-        # distance
-        target_dist = np.linalg.norm(self.param.sliders[0].q[0:2] - self.param.pushers.q[0:2])
+        if mode <= 0:
+            _pusher = np.zeros_like(_pusher)
+            fingers = np.zeros_like(fingers)
+        _state1 = np.hstack((
+                _table,
+                _sliders[0][:2] * 2,
+                [(_sliders[0][0] +  _sliders[0][3] * _sliders_theta_cos[0]) * 2,
+                 (_sliders[0][1] +  _sliders[0][3] * _sliders_theta_sin[0]) * 2,
+                 (_sliders[0][0] + -_sliders[0][4] * _sliders_theta_sin[0]) * 2,
+                 (_sliders[0][1] +  _sliders[0][4] * _sliders_theta_cos[0]) * 2,
+                 (_sliders[0][0] + -_sliders[0][3] * _sliders_theta_cos[0]) * 2,
+                 (_sliders[0][1] + -_sliders[0][3] * _sliders_theta_sin[0]) * 2,
+                 (_sliders[0][0] +  _sliders[0][4] * _sliders_theta_sin[0]) * 2,
+                 (_sliders[0][1] + -_sliders[0][4] * _sliders_theta_cos[0]) * 2,
+                ],
+                (len(_sliders) / 5) - 1,
+                _pusher[:2] * 2,
+                fingers.reshape(-1) * 2,
+                ))
 
-        ## reward
+        _state2 = np.zeros(((len(_sliders)), 19))
+
+        for idx in range(0, len(_sliders)):
+            # if mode <= 0:
+            #     relative_pusher_target = np.zeros_like(fingers)
+            # else:
+            #     relative_pusher_target = _sliders[idx][:2] - fingers
+            
+            # relative_slider_target = (_sliders[idx][:2] - _sliders[0][:2])
+
+            if idx == 0: _target = -1
+            else:        _target = 1
+
+            _state2[idx] = np.concatenate([
+                _table,
+                [_target],
+                _sliders[idx][:2] * 2,
+                [(_sliders[idx][0] +  _sliders[idx][3] * _sliders_theta_cos[idx]) * 2,
+                 (_sliders[idx][1] +  _sliders[idx][3] * _sliders_theta_sin[idx]) * 2,
+                 (_sliders[idx][0] + -_sliders[idx][4] * _sliders_theta_sin[idx]) * 2,
+                 (_sliders[idx][1] +  _sliders[idx][4] * _sliders_theta_cos[idx]) * 2,
+                 (_sliders[idx][0] + -_sliders[idx][3] * _sliders_theta_cos[idx]) * 2,
+                 (_sliders[idx][1] + -_sliders[idx][3] * _sliders_theta_sin[idx]) * 2,
+                 (_sliders[idx][0] +  _sliders[idx][4] * _sliders_theta_sin[idx]) * 2,
+                 (_sliders[idx][1] + -_sliders[idx][4] * _sliders_theta_cos[idx]) * 2,
+                ],
+                fingers.reshape(-1) * 2,
+            ])
+
+        state = _state1, _state2
+
+        if self.state == "linear":
+            pass
+        elif self.state == "image":
+            state = state_curr.image_state, _state1, _state2
+        else:                        state = None
+
+        # Reward
+        if mode == 0: reward = self.cal_init_reward(state_prev, state_curr)
+        else:         reward = self.cal_reward(state_prev, state_curr)
+
+        # Mode
+        if state_curr.mode < 0:      mode = 0
+        else:                        mode = 1
+
+        return state, reward, state_curr.done, mode 
+
+    def cal_init_reward(self, state_prev: SimulationResult, state_curr: SimulationResult):
+        ## Reward
         reward = 0.0
-        self.state_next = state
 
-        if target_dist < 0.01:
-            _width = 10.
-            print("\t\ttry grasp")
-            while True:
+        if state_prev is None: return 0
+        if state_curr.done & SimulationDoneReason.DONE_GRASP_SUCCESS.value:
+            print("DONE_GRASP_SUCCESS")
+            reward += 15.0
+        if state_curr.done & SimulationDoneReason.DONE_GRASP_FAILED.value:
+            print("DONE_GRASP_FAILED")
+            return -20.0
 
-                # Check gripper width changed
-                if np.abs(_width - self.param.pushers.q[3]) < 0.0001:
-                    print("\t\t\twidth not changed")
-                    done = True
-                    break
-                else: _width = self.param.pushers.q[3]
+        # Spawn failed penalty
+        if state_prev.mode == state_curr.mode:
+            return -1.0
+        else:
+            reward += 1.0
 
-                target_dist = np.linalg.norm(self.param.sliders[0].q[0:2] - self.param.pushers.q[0:2])
-                if (max(target_phi) < 0.003) and (target_dist < 0.01):
-                    print("\t\t\tgrasp")
-                    done = True
-                    break
+        ## Pusher distance from target
+        if len(state_curr.slider_state) == 0:
+            pusher_distance = (state_curr.pusher_state[:2] - np.array([0, 0]))
+        else:
+            pusher_distance = (state_curr.pusher_state[:2] - state_curr.slider_state[0][:2])
+        pusher_distance = np.linalg.norm(pusher_distance)
 
-                success, phi = self._simulate_once(action=np.array([0., 0., 0., -1.]), repeat=1)
-                self._visualize_update()
-                target_phi = phi[:len(self.param.pushers)]
-                obs_phi=phi[len(self.param.pushers):len(self.param.pushers)*len(self.param.sliders)]
+        reward += 6.0 * (1 - pusher_distance / 0.2)
 
-        ## done
-        if np.any(np.abs(_slider_q) > self.table_limit):
-            indices = np.where(np.abs(_slider_q) > self.table_limit)[0]
-            for i in sorted(indices, reverse=True):
-                del self.param.sliders[i]
-            print("\t\t\tdish fall out")
-            done = True
-            reward = -1
-        if max(target_phi) < 0.015:
-            # del self.param.sliders[0]
-            print("\t\t\tgrasp successed!!")
-            done = True
-            reward = +1
-            obs_phi = obs_phi[np.where(obs_phi > 0)]
-        return state, reward, done
-    
-    def cal_reward(self, state, state_next):
-        if state_next is None: return 0
-        reward = 0
-        prev_gripper, prev_obs = state
-        curr_gripper, curr_obs = state_next
-
-        # slider pose
-        prev_dist = np.linalg.norm(np.vstack((prev_obs[:,:2],prev_gripper[6:8])), axis=1)
-        curr_dist = np.linalg.norm(np.vstack((curr_obs[:,:2],curr_gripper[6:8])), axis=1)
-
-        ## reward
-        reward = 0.0
-        if (curr_gripper[2] - prev_gripper[2]) < -1e-3: reward += -0.01
-        else: pass #reward += 0.01
-        _delta_slider_dist = np.where(prev_dist - curr_dist + 1e-4 < 0)[0]
-        if len(_delta_slider_dist) > 0:
-            reward += -0.1 * len(_delta_slider_dist)
         return reward
+        
+    def augment_init_data(self, state1 = np.array([0, 0])):
+        state = copy.deepcopy(state1)
+        width = self.display_size * self.unit / 2
 
-    def get_setting(self):
-        # Table setting
+        action = np.zeros(4)
+
+        _pusher = self.state_prev.pusher_state
+
+        action[:2] = _pusher[:2] / (self.display_size * self.unit / 2)
+        action[2] = _pusher[2] / np.pi
+        action[3] = (_pusher[3] - self.pusher_width_limit[1]) / (self.pusher_width_limit[0] - self.pusher_width_limit[1]) * 2 - 1
+
+        ## Pusher distance from target
+        pusher = state[2:4]
+        target = state[7:9]
+        pusher_distance = (pusher - target) * width
+        pusher_distance = np.linalg.norm(pusher_distance)
+    
+        reward = 0
+        if pusher_distance < 0.005:
+            reward += 20.0
+        reward += 10.0
+        reward += 12.0 * (1 - pusher_distance / 0.2)
+
+        state[2:7] = np.zeros_like(state[2:7])
+        
+        return state, reward, action.astype(np.float32)
+
+    def cal_reward(self, state_prev: SimulationResult, state_curr: SimulationResult):
+        if state_prev is None: return 0
+
+        ## Reward
+        reward = -1.5
+
+        ## Failed
+        if state_curr.done & SimulationDoneReason.DONE_FALL_OUT.value:
+            print("DONE_FALL_OUT")
+            return -20.0
+        if state_curr.done & SimulationDoneReason.DONE_GRASP_SUCCESS.value:
+            print("DONE_GRASP_SUCCESS")
+            return 15.0
+        if state_curr.done & SimulationDoneReason.DONE_GRASP_FAILED.value:
+            print("DONE_GRASP_FAILED")
+            return -20.0
+
+        ## Pusher distance from target
+        pusher_distance_prev = np.linalg.norm(state_prev.pusher_state[:2] - state_prev.slider_state[0][:2])
+        if len(state_curr.slider_state) == 0:
+            pusher_distance_curr = pusher_distance_prev
+        else:
+            pusher_distance_curr = np.linalg.norm(state_curr.pusher_state[:2] - state_curr.slider_state[0][:2])
+        pusher_distance_diff = (pusher_distance_prev - pusher_distance_curr) * self.fps / self.action_skip
+
+        # velocity
+        reward += 15.0 * pusher_distance_diff
+        # distance
+        reward += 1.3 * (0.4 - pusher_distance_curr) / 0.4
+
+        ## Slider
+        if len(state_prev.slider_state) != len(state_curr.slider_state):
+            reward += -1.0
+        else:
+            slider_distance = np.linalg.norm((np.array(state_prev.slider_state)[:,:2] - np.array(state_curr.slider_state)[:,:2]), axis=1)
+            slider_distance_diff = slider_distance * self.fps / self.action_skip
+
+            _delta_slider_dist = np.where(np.abs(slider_distance_diff[1:]) - 1e-5 > 0)[0]
+            if len(_delta_slider_dist) > 0:
+                reward += -1.0
+            if slider_distance_diff[0] - 1e-5 > 0:
+                reward += -0.8
+            
+            # Simulation break case
+            if np.max(np.abs(slider_distance_diff)) > 0.2:
+                print("SIMULATION BREAK")
+                reward = -1000
+
+            # Check danger
+            slider_distance = (
+                (np.abs(np.array(state_prev.slider_state)[:,:2]) - np.abs(np.array(state_curr.slider_state)[:,:2]))
+                ).reshape(-1)
+            danger_list = np.array(state_curr.slider_state)[:,:2]
+
+            danger_list1 = ((np.abs(danger_list) + self.min_r * 2.0 - self.table_limit) / (self.min_r * 2.0)).reshape(-1)
+            danger_list1[np.where(danger_list1 < 0.0)[0]] = 0
+
+            danger_list1[np.where(np.abs(slider_distance) - 1e-9 < 0)[0]] = 0
+            danger_list1[np.where(slider_distance - 1e-9 > 0)[0]] *= -1
+
+            danger_list_num1 = danger_list1
+            reward += -10.0 * (np.sum(danger_list_num1) / 3)
+
+        return reward
+    
+    def get_state(self):
         table_size = self.table_limit * 2
-        pusher_pose = self.pushers.q
-        slider_pose = []
-        for slider in self.param.sliders:
-            slider_pose.append([slider.q, slider.a, slider.b])
-        slider_num = len(self.param.sliders)
+        slider_state = self.state_prev.slider_state
+        return {"table_size":table_size, "slider_state":slider_state}
 
-        return {"table_size":table_size, "pusher_pose":pusher_pose, "slider_pose":slider_pose, "slider_num":slider_num}
-
-    def generate_spawn_points(self, num_points, center_bias=0.75):
+    def generate_spawn_points(self, num_points, center_bias=0.7):
         points = []
-        x_range = (-self.table_limit[0] + self.min_r * 1.3, self.table_limit[0] - self.min_r * 1.3)
-        y_range = (-self.table_limit[1] + self.min_r * 1.3, self.table_limit[1] - self.min_r * 1.3)
+        x_range = ((-self.table_limit[0] + self.min_r * 1.3) * 0.9, (self.table_limit[0] - self.min_r * 1.3) * 0.9)
+        y_range = ((-self.table_limit[1] + self.min_r * 1.3) * 0.9, (self.table_limit[1] - self.min_r * 1.3) * 0.9)
 
         # 첫 번째 점을 랜덤하게 생성
-        center_x = random.uniform(*x_range) * 0.9
-        center_y = random.uniform(*y_range) * 0.9
+        center_x = random.uniform(*x_range)
+        center_y = random.uniform(*y_range)
         points.append((center_x, center_y))
 
         # Raduis of inital point
@@ -506,154 +447,134 @@ class Simulation():
 
         # 첫 번째 점을 포함한 최종 점 리스트
         return points, np.array(min_distances)
-
-    def create_background_surface(self, table_size, grid:bool = False):
-
-        _width, _height = self.display_size
-
-        # Generate pygame surface
-        background_surface = pygame.Surface((_width, _height))    # Generate pygame surface with specific size
-        background_surface.fill(COLOR["BLACK"])                          # Fill surface as white
-
-        # Draw white rectangle at the center
-        table_rect = pygame.Rect(
-            self.display_center[0] - table_size[0] // 2,  # Top-left x
-            self.display_center[1] - table_size[1] // 2,  # Top-left y
-            table_size[0],                  # Width
-            table_size[1]                   # Height
-        )
-        pygame.draw.rect(background_surface, COLOR["WHITE"], table_rect)  # Fill the table area with black
-
-        # Draw gridlines
-        # 0.1m spacing
-        if grid:
-            gap = 1 / self.unit / 10  # Guideline lengh
-            for y_idx in range(int(_height / gap)): pygame.draw.line(background_surface, COLOR["LIGHTGRAY"], (0, y_idx * gap), (_width, y_idx * gap), 2)  # horizontal gridlines
-            for x_idx in range(int(_width  / gap)): pygame.draw.line(background_surface, COLOR["LIGHTGRAY"], (x_idx * gap, 0), (x_idx * gap, _height), 2) # vertical gridlines
-            # 1m spacing
-            gap = 1 / self.unit      # Guideline lengh
-            for y_idx in range(int(_height / gap)): pygame.draw.line(background_surface, COLOR["DARKGRAY"], (0, y_idx * gap), (_width, y_idx * gap), 2)   # horizontal gridlines
-            for x_idx in range(int(_width  / gap)): pygame.draw.line(background_surface, COLOR["DARKGRAY"], (x_idx * gap, 0), (x_idx * gap, _height), 2)  # vertical gridlines
-        return background_surface
-
-    def create_polygon_surface(self, points, color):
-        # Convert polygon points coordinate to pygame display coordinate\
-        _points = points.T / self.unit
-
-        w_l = np.abs(np.min(_points[:,0])) if np.abs(np.min(_points[:,0])) > np.max(_points[:,0]) else np.max(_points[:,0])
-        h_l = np.abs(np.min(_points[:,1])) if np.abs(np.min(_points[:,1])) > np.max(_points[:,1]) else np.max(_points[:,1])
-
-        _points[:,0] =  1.0 * _points[:,0] + w_l
-        _points[:,1] = -1.0 * _points[:,1] + h_l
-
-        # Set pygame surface size
-        width  = int(w_l * 2)
-        height = int(h_l * 2)
-        # Generate pygame surface
-        polygon_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-        # Draw
-        pygame.draw.polygon(polygon_surface, color, _points.astype(int).tolist())                               # Draw polygon
-        pygame.draw.line(polygon_surface, COLOR["WHITE"], (width / 4, height / 2), (width * 3 / 4, height / 2), 3)   # Draw horizontal line
-        pygame.draw.line(polygon_surface, COLOR["WHITE"], (width / 2, height / 4), (width / 2, height * 3 / 4), 3)   # Draw vertical line
-        return polygon_surface
-
-    def create_bead_surface(self, radius = 12, width = 4):
-        # Generate pygame surface
-        lengh = (radius + width) * 2
-        polygon_surface = pygame.Surface((lengh,lengh), pygame.SRCALPHA)
-        center = lengh // 2
-        # Draw
-        pygame.draw.circle(polygon_surface, color=COLOR["DARKGRAY"], center=[center,center] , radius=radius, width = width)
-        return polygon_surface
-
-    def gripper_pose(self):
-        return self.pushers.q
-
-    def ellipse_list(self):
-        return self.param.sliders
-
-    def close(self):
-        print("close")
-        pygame.quit()
-        del(self.param)
-
-    def __del__(self):
-        print("del")
-        pygame.quit()
-        del(self.param)
+    def get_image(self):
+        return self.state_prev.image_state
 
 class DishSimulation():
-    def __init__(self, visualize:str = 'human', state:str = 'image', random_place:bool = True, action_skip:int = 5):
-        self.env = Simulation(visualize = visualize, state = state, random_place = random_place, action_skip = action_skip)
+    def __init__(self, visualize:str = 'human', state:str = 'image', action_skip:int = 5, record:bool = False, save_dir:str = "recordings"):
+        self.env = Simulation(visualize = visualize, state = state, action_skip = action_skip, record = record, save_dir=save_dir)
         self._count = 0
-        self._pusher_direction = np.array([[1, 1, 1, 1],
-                                           [1, -1, 1, 1],
-                                           [-1, -1, 1, 1],
-                                           [-1, 1, 1, 1],
-                                           ])
-        self.save_dir = os.path.dirname(os.path.abspath(__file__)) + "/../../../../data/"
+        self._setting = None
+        self.save_dir = os.path.dirname(os.path.abspath(__file__)) + "/../../data/"
         self.skip_frame = 0
+    
+    def reset(self, mode:str=None, slider_num:int = 15):
+        if mode == None: 
+            state_curr = self.env.reset(slider_num=slider_num)
+            self._setting = self.env.get_state()
 
-    def keyboard_input(self, action):
-        # Keyboard event
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                break
-
-        # Keyboard input
-        keys = pygame.key.get_pressed()
-
-        ## Keyboard input response
-        # Move pusher center in y-axis (ws)
-        if keys[pygame.K_w]:   action[0] +=  1/10  # Move forward      (w)
-        elif keys[pygame.K_s]: action[0] += -1/10  # Move backward     (s)
-        else:                  action[0]  =  0                # Stop
-        # Move pusher center in x-axis (ad)
-        if keys[pygame.K_a]:   action[1] +=  1/10  # Move left         (a)
-        elif keys[pygame.K_d]: action[1] += -1/10  # Move right        (d)
-        else:                  action[1]  =  0                # Stop
-        # Rotate pusher center (qe)
-        if keys[pygame.K_q]:   action[2] +=  1/10  # Turn ccw          (q)
-        elif keys[pygame.K_e]: action[2] += -1/10  # Turn cw           (e)
-        else:                  action[2]  =  0                # Stop
-        # Control gripper width (left, right)
-        if keys[pygame.K_LEFT]:    action[3] += -1/10  # Decrease width
-        elif keys[pygame.K_RIGHT]: action[3] +=  1/10  # Increase width
-        else:                      action[3]  = 0
-
-        if keys[pygame.K_r]: 
-            return np.zeros_like(action), True
-
-        return action, False
+        elif mode == "continous":
+            _setting = self.env.get_state()
+            if (self._setting == None) or (len(_setting["slider_state"]) == 0):
+                state_curr = self.env.reset(slider_num=slider_num)
+                self._setting = _setting
+            else:
+                state_curr = self.env.reset(
+                    table_size  = _setting["table_size"],
+                    slider_state = _setting["slider_state"],
+                    )
         
-    def reset(self, settings):
-        state_curr, _ = self.env.reset(
-            table_size  = settings["table_size"],
-            pusher_pose = settings["pusher_pose"],
-            slider_pose = settings["slider_pose"],
-            slider_num  = settings["slider_num"],
-            )
-        self._count += 1
-        self._count = (self._count + 1) % 4
-        return state_curr[0]
+        elif mode == "pusher":
+            if self._count == 0:
+                state_curr = self.env.reset(slider_num=slider_num)
+                self._setting = self.env.get_state()
+                self._count += 1
+            else:
+                state_curr = self.env.reset(
+                    table_size  = self._setting["table_size"],
+                    slider_state = self._setting["slider_state"],
+                    )
+                self._count = (self._count + 1) % 4
 
-    def __del__(self):
-        del self.env
+        elif mode == "test":
+            _setting = self.env.get_state()
+            if (self._setting == None) or (_setting["slider_num"] == 0):
+                state_curr = self.env.reset(slider_num=slider_num)
+                self._setting = _setting
+            else:
+                state_curr = self.env.reset(
+                    table_size  = _setting["table_size"],
+                    slider_state = _setting["slider_state"],
+                    )
+        else: 
+            state_curr = self.env.reset(slider_num=slider_num)
+            self._setting = self.env.get_state()
+        return state_curr
+
+    def keyboard_control(self):
+        return self.env.simulator.keyboard_input()
+
+    def replay_video(self):
+        import cv2
+        player = Player("recordings", GripperMotion.MOVE_XY)
+        state_prev = None
+        for is_new, state, action in player:
+            if is_new: 
+                state_prev = state
+                continue
+
+            # cv2.imshow("Replay", state.image_state)
+            # time.sleep(1/30)
+            # if cv2.waitKey(30) == 27:  # ESC 키로 종료
+            #     break
+            if state.mode < 0: continue
+            yield action[:4], state_prev, self.env.get_results(state_prev, state, state.mode + 1)
+            state_prev = state
+
+        cv2.destroyAllWindows()
+        del player
+        return
 
 if __name__=="__main__":
-    sim = DishSimulation(state='linear', action_skip=1)
-    sim.load_data()
-    state = sim.reset(mode="continous", slider_num=15)
-    # observ_space = sim.env.observation_space.shape[0]
+    # sim = DishSimulation(state='linear', action_skip=8, record=True)
+    sim = DishSimulation(state='linear', action_skip=8)
+    print("start")
+
+    # for action, (state_next, reward, done, mode) in sim.replay_video():
+    #     print(state_next)
+    #     pass
+    # exit()
+
+    import time
+    state = sim.reset(mode=None, slider_num=2)
+    state_curr, _, _, mode = sim.reset(mode="continous", slider_num=2)
+    state_next, reward, done, mode_next = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
+    # state = sim.reset(mode=None, slider_num=8)
     action_space = sim.env.action_space.shape[0]
     action = np.zeros(action_space) # Initialize pusher's speed set as zeros 
+    step = 0
     while True:
-        action, reset = sim.keyboard_input(action)
-        action = action * (0.5 + np.random.random(4) * 4 / 10)
-        state_next, reward, done = sim.env.step(action=action)
-        if np.any(action):
-            sim.save_data(state, action, reward, state_next, skip=30, force_save=done)
-        state = state_next
-        if reset or done:
-            # sim.env.reset(slider_num=1)
-            sim.reset(mode="continous")
+        action, escape, reset = sim.keyboard_control()
+        if any(action) != 0.:
+            # if action[4]>0.5:
+            #     action[4] = np.random.random() * 0.5 + 0.5
+            # else:
+            #     action[4] = np.random.random() * 0.5
+            # action[:4] *= np.random.random(4)
+            # action[4] = np.random.random() * 0.5
+        
+            step += 1
+            if step % 10 == 0:
+                state_next1, state_next2 = state_next
+                _, reward, action = sim.env.augment_init_data(state_next1)
+                state_next, reward, done, mode = sim.env.step(action=action, mode=0)
+            else:
+                state_next, reward, done, mode = sim.env.step(action=action[:4])
+                
+            state = state_next
+            time.sleep(0.01)
+            if reset or done:
+                state_curr, _, _, mode = sim.reset(mode="continous")
+                state_next, reward, done, mode_next = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
+                step = 0
+                time.sleep(1)
+            if escape:
+                exit()
+        else:
+            time.sleep(0.01)
+            if reset:
+                state_curr, _, _, mode = sim.reset(mode="continous")
+                state_next, reward, done, mode_next = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
+                step = 0
+            if escape:
+                exit()

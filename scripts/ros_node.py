@@ -22,6 +22,8 @@ from moveit_msgs.msg import CartesianTrajectory, CartesianTrajectoryPoint
 current_file_path = os.path.abspath(__file__)
 current_directory = os.path.dirname(current_file_path)
 sys.path.append(os.path.abspath(current_directory + "/third_party/quasi_static_push/scripts/"))
+so_file_path = os.path.abspath("../cpp")
+sys.path.append(so_file_path)
 
 from sweep_and_grasp_the_dishes.srv import GetSweepGraspDishesPath, GetSweepGraspDishesPathRequest, GetSweepGraspDishesPathResponse
 from utils.model import ActorNetwork
@@ -112,7 +114,7 @@ class SweepGraspDishesServer(object):
 
         # Parse table (map) data.
         # Convert table_detection from vision_msgs/BoundingBox3D to map corner and table normal vector matrix.
-        map_corners, table_center, table_rotation, rot_matrix = self.parse_table_detection_msg(table_det_msg) # min_x, max_x, min_y, max_y
+        table_corners, table_center, table_rotation, rot_matrix = self.parse_table_detection_msg(table_det_msg) # min_x, max_x, min_y, max_y
 
         # Parse camera data.
         # Convert camera extrinsic type from geometry_msgs/PoseStamped to extrinsic tf.
@@ -128,7 +130,11 @@ class SweepGraspDishesServer(object):
         cps = EdgeSampler(cam_intr,cam_pos)
 
         # param for simulation
-        table_size  = np.array([table_center[0] - map_corners[0], table_center[1] - map_corners[2]]) * 2
+        work_space = np.array(self.planner_config["work_space"])
+        table_data_x = np.clip(table_corners[:2], work_space[0,0], work_space[0,1])
+        table_data_y = np.clip(table_corners[2:], work_space[1,0], work_space[1,1])
+        table_size  = np.array([table_data_x[1] - table_data_x[0], table_data_y[1] - table_data_y[0]])
+        table_center = np.array([table_data_x[0], table_data_y[0]]) + table_size / 2
         slider_pose = []
 
         # target dish
@@ -147,9 +153,13 @@ class SweepGraspDishesServer(object):
         obs_ellipse_list=[]
         for _obs in obs_edge_list:
             _obs_ellipse = Ellipse(_obs.edge_xyz[:,0], _obs.edge_xyz[:,1])
+            if _obs_ellipse.q[0][0] < table_data_x[0]: continue
+            elif _obs_ellipse.q[0][0] > table_data_x[1]: continue
+            elif _obs_ellipse.q[0][1] < table_data_y[0]: continue
+            elif _obs_ellipse.q[0][1] > table_data_y[1]: continue
             obs_ellipse_list.append(_obs_ellipse)
             slider_pose.append(_obs_ellipse.q)
-        
+
         # Notice the target dish and obstacles 
         # Target dish
         rospy.loginfo("target dish [m]: \t x: {:.3f}, y: {:.3f}".format(target_ellipse.center[0], target_ellipse.center[1]))
@@ -166,16 +176,20 @@ class SweepGraspDishesServer(object):
         for ellipse in slider_pose:
             ellipse[0][:2] -= table_center[:2]
         
-        pusher_pose = copy.deepcopy(self.start_point) - table_center[:2]
+        pusher_pose = copy.deepcopy(self.start_point)
+        pusher_pose[:,:2] -= table_center[:2]
+        pusher_pose[:,2] *= (np.pi / 180)
+        
         success = False
         for i in range(len(pusher_pose)):
             if success: break
             rospy.loginfo("generating path #{0}".format(i))
             path = []
+            move_idx = None
             state = self.sim.reset(
                 {
                 "table_size":table_size, 
-                "pusher_pose":np.hstack((pusher_pose[i,0], pusher_pose[i, 1], [0, 0.185])),
+                "pusher_pose":np.hstack((pusher_pose[i,0], pusher_pose[i, 1], pusher_pose[i, 2], [0.185])),
                 "slider_pose":slider_pose, 
                 "slider_num":None
                 })
@@ -183,14 +197,23 @@ class SweepGraspDishesServer(object):
             
             for step in range(1, 300):
                 state, reward, done = self.sim.env.step(self.actor(state))
+                
                 path.append(self.sim.env.gripper_pose())
+                    
+                if move_idx == None and reward < 0:
+                    move_idx = step
+                    image_mid = self.sim.env.get_image()
+                    
                 if done:
                     after_ellipse_list = self.sim.env.ellipse_list()
                     if reward > 0: success = True
                     image_end = self.sim.env.get_image()
                     break
-
-        path = np.array(path)
+        if move_idx is None:
+            move_idx = len(path) - 1 if len(path) > 1 else len(path)
+            image_mid = image_end
+        else: move_idx = move_idx - 5 if move_idx > 5 else move_idx
+        path = np.array(path)[move_idx:]
         path[:,:2] += table_center[:2]
         _spent_time = rospy.Duration.from_sec(step * self.simulat_config["frame_skip"] / self.simulat_config["fps"])
 
@@ -206,8 +229,8 @@ class SweepGraspDishesServer(object):
             ax1.grid(True)
             
             # Draw table
-            ax1.set_xlim([map_corners[0] - 0.1, map_corners[1] + 0.1])
-            ax1.set_ylim([map_corners[2] - 0.1, map_corners[3] + 0.1])
+            ax1.set_xlim([table_corners[0] - 0.1, table_corners[1] + 0.1])
+            ax1.set_ylim([table_corners[2] - 0.1, table_corners[3] + 0.1])
 
             # Draw target
             x, y = origin_target_ellipse.get_ellipse_pts()
@@ -232,7 +255,8 @@ class SweepGraspDishesServer(object):
             ax1.plot(path[:,0], path[:,1], 'red', linewidth=4)
 
             ax1.set_aspect('equal')
-            ax3.imshow(image_start)
+            ax2.imshow(image_start)
+            ax3.imshow(image_mid)
             ax4.imshow(image_end)
                 
             plt.show()
