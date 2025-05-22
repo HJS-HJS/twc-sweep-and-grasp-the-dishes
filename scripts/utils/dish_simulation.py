@@ -317,7 +317,7 @@ class Simulation():
             print("DONE_GRASP_FAIL")
             return -10.0
 
-        return reward -1.0
+        return -1.0
     
     def get_state(self):
         table_size = self.table_limit * 2

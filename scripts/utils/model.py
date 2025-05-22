@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 
 ## Parameters
-FILE_NAME = None
 N_INPUTS1   = 15 #9
 N_INPUTS2   = 20 #9
 N_OUTPUT    = 4
@@ -80,7 +79,7 @@ class InteractionNetwork(nn.Module):
         return torch.cat([mean_pool, max_pool], dim=-1)  # [B, 2H]
 
 class ActorNetwork(nn.Module):
-    def __init__(self, n_state:int = 4, n_obs:int = 4, n_action:int = 2):
+    def __init__(self, n_state:int = N_INPUTS1, n_obs:int = N_INPUTS2, n_action:int = N_OUTPUT):
         super(ActorNetwork, self).__init__()
         self.layer = nn.Sequential(
             nn.Linear(n_state, 512),
