@@ -50,7 +50,7 @@ class SweepGraspDishesServer(object):
 
         current_file_path = os.path.abspath(__file__)
         current_directory = os.path.dirname(current_file_path)
-        model_path = current_directory + "/../model/SAC"
+        model_path = current_directory + "/../model"
         model_name = self.planner_config["model"]
         self.start_point = np.array(self.planner_config["start_point"])
 

@@ -158,7 +158,8 @@ class Simulation():
         if(len(action) == 3): action = np.hstack((action, 1))
 
         if len(action) == 1:
-            state_curr = self.simulator.run([0., 0., 0. ,0., 1.])
+            # state_curr = self.simulator.run([0., 0., 0. ,0., 1.])
+            state_curr = self.simulator.run([0., 0., 0. ,0., 0.])
             mode = 0
         elif mode == 0:
             if(len(action) != 4): print("Invalid position size")

@@ -86,7 +86,7 @@ class ActorNetwork(nn.Module):
             nn.ReLU(),
         )
 
-        self.obs_layer = nn.ModuleList([
+        self.self_attention = nn.ModuleList([
             InteractionNetwork(state_dim=n_state, obs_dim=n_obs, hidden_dim=512)
             for _ in range(2)
             ])
@@ -122,7 +122,7 @@ class ActorNetwork(nn.Module):
 
         mode_idx = mode.item()
         # Obs self attention
-        _obs = self.obs_layer[mode_idx](state, obs)  # [batch, 1024]
+        _obs = self.self_attention[mode_idx](state, obs)  # [batch, 1024]
         _state = torch.cat([_state, _obs], dim=1)
         mu = self.mu[mode_idx](_state)
 
