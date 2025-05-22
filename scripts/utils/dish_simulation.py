@@ -390,98 +390,46 @@ class DishSimulation():
     def __init__(self, visualize:str = 'human', state:str = 'image', action_skip:int = 5, record:bool = False, save_dir:str = "recordings"):
         self.env = Simulation(visualize = visualize, state = state, action_skip = action_skip, record = record, save_dir=save_dir)
         self._count = 0
-        self._setting = None
         self.save_dir = os.path.dirname(os.path.abspath(__file__)) + "/../../data/"
         self.skip_frame = 0
     
-    # def reset(self, 
-    #           table_size:List[float] = None,
-    #           slider_state:List[List[float]] = None,
-    #           slider_num:int=None,
     def reset(self, mode:str=None, slider_num:int = 15, setting = None):
         if mode == None: 
             state_curr = self.env.reset(slider_num=slider_num)
-            self._setting = self.env.get_state()
         else: 
-            state_curr = self.env.reset(table_size = setting["table_size"],
-                                        slider_state = setting["slider_state"],)
-            self._setting = self.env.get_state()
+            if(len(setting["slider_state"]) == 1): 
+                state_curr = self.env.reset(slider_num=slider_num)
+            else:
+                state_curr = self.env.reset(table_size = setting["table_size"],
+                                            slider_state = np.array(setting["slider_state"])[1:],)
         return state_curr
 
     def keyboard_control(self):
         return self.env.simulator.keyboard_input()
 
-    def replay_video(self):
-        import cv2
-        player = Player("recordings", GripperMotion.MOVE_XY)
-        state_prev = None
-        for is_new, state, action in player:
-            if is_new: 
-                state_prev = state
-                continue
-
-            # cv2.imshow("Replay", state.image_state)
-            # time.sleep(1/30)
-            # if cv2.waitKey(30) == 27:  # ESC 키로 종료
-            #     break
-            if state.mode < 0: continue
-            yield action[:4], state_prev, self.env.get_results(state_prev, state, state.mode + 1)
-            state_prev = state
-
-        cv2.destroyAllWindows()
-        del player
-        return
-
 if __name__=="__main__":
-    # sim = DishSimulation(state='linear', action_skip=8, record=True)
+    import time
+
     sim = DishSimulation(state='linear', action_skip=8)
     print("start")
 
-    # for action, (state_next, reward, done, mode) in sim.replay_video():
-    #     print(state_next)
-    #     pass
-    # exit()
+    state_curr, _, _, mode = sim.reset(mode=None, slider_num=4)
+    state_next, reward, done, mode = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
 
-    import time
-    state = sim.reset(mode=None, slider_num=2)
-    state_curr, _, _, mode = sim.reset(mode="continous", slider_num=2)
-    state_next, reward, done, mode_next = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
-    # state = sim.reset(mode=None, slider_num=8)
-    action_space = sim.env.action_space.shape[0]
-    action = np.zeros(action_space) # Initialize pusher's speed set as zeros 
-    step = 0
+    action = np.zeros(5) # Initialize pusher's speed set as zeros 
     while True:
         action, escape, reset = sim.keyboard_control()
-        if any(action) != 0.:
-            # if action[4]>0.5:
-            #     action[4] = np.random.random() * 0.5 + 0.5
-            # else:
-            #     action[4] = np.random.random() * 0.5
-            # action[:4] *= np.random.random(4)
-            # action[4] = np.random.random() * 0.5
-        
-            step += 1
-            if step % 10 == 0:
-                state_next1, state_next2 = state_next
-                _, reward, action = sim.env.augment_init_data(state_next1)
-                state_next, reward, done, mode = sim.env.step(action=action, mode=0)
-            else:
-                state_next, reward, done, mode = sim.env.step(action=action[:4])
-                
-            state = state_next
-            time.sleep(0.01)
-            if reset or done:
-                state_curr, _, _, mode = sim.reset(mode="continous")
-                state_next, reward, done, mode_next = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
-                step = 0
-                time.sleep(1)
-            if escape:
-                exit()
-        else:
-            time.sleep(0.01)
-            if reset:
-                state_curr, _, _, mode = sim.reset(mode="continous")
-                state_next, reward, done, mode_next = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
-                step = 0
-            if escape:
-                exit()
+
+        state_next1, state_next2 = state_next
+        state_next, reward, done, mode = sim.env.step(action=action[:4], mode=mode)
+            
+        state = state_next
+        time.sleep(0.01)
+        if reset or done:
+            simulation_state = sim.env.get_state()
+            state_curr, _, _, mode = sim.reset(mode="continuous", setting=simulation_state)
+            state_next, reward, done, mode = sim.env.step([random.choice([0.9, -0.9]), random.choice([0.9, -0.9]), 0, 0.5], mode)
+            step = 0
+            time.sleep(1)
+        if escape:
+            exit()
