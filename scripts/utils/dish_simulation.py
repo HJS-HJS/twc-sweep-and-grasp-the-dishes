@@ -154,7 +154,7 @@ class Simulation():
         if(len(action) == 3): action = np.hstack((action, 1))
 
         if len(action) == 1:
-            state_curr = self.simulator.run([0., 0., 0. ,0., 0.])
+            state_curr = self.simulator.run([0., 0., 0. ,0., 1.])
             mode = 0
         elif mode == 0:
             if(len(action) != 4): print("Invalid position size")
@@ -207,21 +207,28 @@ class Simulation():
              _pusher[1] +  np.sin(_pusher[2] + np.pi / 6 + np.pi * 4 / 3) * _pusher_width],
         ])
 
+        np.random.shuffle(fingers)
+
         if mode <= 0:
             _pusher = np.zeros_like(_pusher)
             fingers = np.zeros_like(fingers)
+
+        _slider_edge = np.array([
+            [_sliders[0][0] +  _sliders[0][3] * _sliders_theta_cos[0],
+             _sliders[0][1] +  _sliders[0][3] * _sliders_theta_sin[0]],
+            [_sliders[0][0] + -_sliders[0][4] * _sliders_theta_sin[0],
+             _sliders[0][1] +  _sliders[0][4] * _sliders_theta_cos[0]],
+            [_sliders[0][0] + -_sliders[0][3] * _sliders_theta_cos[0],
+             _sliders[0][1] + -_sliders[0][3] * _sliders_theta_sin[0]],
+            [_sliders[0][0] +  _sliders[0][4] * _sliders_theta_sin[0],
+             _sliders[0][1] + -_sliders[0][4] * _sliders_theta_cos[0]],
+        ])
+        np.random.shuffle(_slider_edge)
+
         _state1 = np.hstack((
                 _table,
                 _sliders[0][:2] * 2,
-                [(_sliders[0][0] +  _sliders[0][3] * _sliders_theta_cos[0]) * 2,
-                 (_sliders[0][1] +  _sliders[0][3] * _sliders_theta_sin[0]) * 2,
-                 (_sliders[0][0] + -_sliders[0][4] * _sliders_theta_sin[0]) * 2,
-                 (_sliders[0][1] +  _sliders[0][4] * _sliders_theta_cos[0]) * 2,
-                 (_sliders[0][0] + -_sliders[0][3] * _sliders_theta_cos[0]) * 2,
-                 (_sliders[0][1] + -_sliders[0][3] * _sliders_theta_sin[0]) * 2,
-                 (_sliders[0][0] +  _sliders[0][4] * _sliders_theta_sin[0]) * 2,
-                 (_sliders[0][1] + -_sliders[0][4] * _sliders_theta_cos[0]) * 2,
-                ],
+                _slider_edge.reshape(-1) * 2,
                 (len(_sliders) / 5) - 1,
                 _pusher[:2] * 2,
                 fingers.reshape(-1) * 2,
@@ -230,33 +237,31 @@ class Simulation():
         _state2 = np.zeros(((len(_sliders)), 19))
 
         for idx in range(0, len(_sliders)):
-            # if mode <= 0:
-            #     relative_pusher_target = np.zeros_like(fingers)
-            # else:
-            #     relative_pusher_target = _sliders[idx][:2] - fingers
-            
-            # relative_slider_target = (_sliders[idx][:2] - _sliders[0][:2])
 
             if idx == 0: _target = -1
             else:        _target = 1
+
+            _slider_edge = np.array([
+                [(_sliders[idx][0] +  _sliders[idx][3] * _sliders_theta_cos[idx]),
+                 (_sliders[idx][1] +  _sliders[idx][3] * _sliders_theta_sin[idx])],
+                [(_sliders[idx][0] + -_sliders[idx][4] * _sliders_theta_sin[idx]),
+                 (_sliders[idx][1] +  _sliders[idx][4] * _sliders_theta_cos[idx])],
+                [(_sliders[idx][0] + -_sliders[idx][3] * _sliders_theta_cos[idx]),
+                 (_sliders[idx][1] + -_sliders[idx][3] * _sliders_theta_sin[idx])],
+                [(_sliders[idx][0] +  _sliders[idx][4] * _sliders_theta_sin[idx]),
+                 (_sliders[idx][1] + -_sliders[idx][4] * _sliders_theta_cos[idx])],
+            ])
+            np.random.shuffle(_slider_edge)
 
             _state2[idx] = np.concatenate([
                 _table,
                 [_target],
                 _sliders[idx][:2] * 2,
-                [(_sliders[idx][0] +  _sliders[idx][3] * _sliders_theta_cos[idx]) * 2,
-                 (_sliders[idx][1] +  _sliders[idx][3] * _sliders_theta_sin[idx]) * 2,
-                 (_sliders[idx][0] + -_sliders[idx][4] * _sliders_theta_sin[idx]) * 2,
-                 (_sliders[idx][1] +  _sliders[idx][4] * _sliders_theta_cos[idx]) * 2,
-                 (_sliders[idx][0] + -_sliders[idx][3] * _sliders_theta_cos[idx]) * 2,
-                 (_sliders[idx][1] + -_sliders[idx][3] * _sliders_theta_sin[idx]) * 2,
-                 (_sliders[idx][0] +  _sliders[idx][4] * _sliders_theta_sin[idx]) * 2,
-                 (_sliders[idx][1] + -_sliders[idx][4] * _sliders_theta_cos[idx]) * 2,
-                ],
+                _slider_edge.reshape(-1) * 2,
                 fingers.reshape(-1) * 2,
             ])
 
-        state = _state1, _state2
+        state = _state1 * 5, _state2 * 5
 
         if self.state == "linear":
             pass
@@ -275,78 +280,24 @@ class Simulation():
         return state, reward, state_curr.done, mode 
 
     def cal_init_reward(self, state_prev: SimulationResult, state_curr: SimulationResult):
-        ## Reward
-        reward = 0.0
-
-        if state_prev is None: return 0
-        if state_curr.done & SimulationDoneReason.DONE_GRASP_SUCCESS.value:
-            print("DONE_GRASP_SUCCESS")
-            reward += 15.0
-        if state_curr.done & SimulationDoneReason.DONE_GRASP_FAILED.value:
-            print("DONE_GRASP_FAILED")
-            return -20.0
-
-        # Spawn failed penalty
-        if state_prev.mode == state_curr.mode:
-            return -1.0
-        else:
-            reward += 1.0
-
-        ## Pusher distance from target
-        if len(state_curr.slider_state) == 0:
-            pusher_distance = (state_curr.pusher_state[:2] - np.array([0, 0]))
-        else:
-            pusher_distance = (state_curr.pusher_state[:2] - state_curr.slider_state[0][:2])
-        pusher_distance = np.linalg.norm(pusher_distance)
-
-        reward += 6.0 * (1 - pusher_distance / 0.2)
-
-        return reward
-        
-    def augment_init_data(self, state1 = np.array([0, 0])):
-        state = copy.deepcopy(state1)
-        width = self.display_size * self.unit / 2
-
-        action = np.zeros(4)
-
-        _pusher = self.state_prev.pusher_state
-
-        action[:2] = _pusher[:2] / (self.display_size * self.unit / 2)
-        action[2] = _pusher[2] / np.pi
-        action[3] = (_pusher[3] - self.pusher_width_limit[1]) / (self.pusher_width_limit[0] - self.pusher_width_limit[1]) * 2 - 1
-
-        ## Pusher distance from target
-        pusher = state[2:4]
-        target = state[7:9]
-        pusher_distance = (pusher - target) * width
-        pusher_distance = np.linalg.norm(pusher_distance)
+        return 0
     
-        reward = 0
-        if pusher_distance < 0.005:
-            reward += 20.0
-        reward += 10.0
-        reward += 12.0 * (1 - pusher_distance / 0.2)
-
-        state[2:7] = np.zeros_like(state[2:7])
-        
-        return state, reward, action.astype(np.float32)
-
     def cal_reward(self, state_prev: SimulationResult, state_curr: SimulationResult):
         if state_prev is None: return 0
 
         ## Reward
-        reward = -1.5
+        reward = 0.1
 
         ## Failed
         if state_curr.done & SimulationDoneReason.DONE_FALL_OUT.value:
             print("DONE_FALL_OUT")
-            return -20.0
+            return -5.0
         if state_curr.done & SimulationDoneReason.DONE_GRASP_SUCCESS.value:
             print("DONE_GRASP_SUCCESS")
-            return 15.0
+            return 5.0
         if state_curr.done & SimulationDoneReason.DONE_GRASP_FAILED.value:
             print("DONE_GRASP_FAILED")
-            return -20.0
+            return -5.0
 
         ## Pusher distance from target
         pusher_distance_prev = np.linalg.norm(state_prev.pusher_state[:2] - state_prev.slider_state[0][:2])
@@ -356,43 +307,23 @@ class Simulation():
             pusher_distance_curr = np.linalg.norm(state_curr.pusher_state[:2] - state_curr.slider_state[0][:2])
         pusher_distance_diff = (pusher_distance_prev - pusher_distance_curr) * self.fps / self.action_skip
 
-        # velocity
-        reward += 15.0 * pusher_distance_diff
-        # distance
-        reward += 1.3 * (0.4 - pusher_distance_curr) / 0.4
-
         ## Slider
         if len(state_prev.slider_state) != len(state_curr.slider_state):
-            reward += -1.0
+            reward += -0.1
         else:
             slider_distance = np.linalg.norm((np.array(state_prev.slider_state)[:,:2] - np.array(state_curr.slider_state)[:,:2]), axis=1)
             slider_distance_diff = slider_distance * self.fps / self.action_skip
 
             _delta_slider_dist = np.where(np.abs(slider_distance_diff[1:]) - 1e-5 > 0)[0]
             if len(_delta_slider_dist) > 0:
-                reward += -1.0
+                reward += -0.5
             if slider_distance_diff[0] - 1e-5 > 0:
-                reward += -0.8
+                reward += -0.5
             
             # Simulation break case
             if np.max(np.abs(slider_distance_diff)) > 0.2:
                 print("SIMULATION BREAK")
                 reward = -1000
-
-            # Check danger
-            slider_distance = (
-                (np.abs(np.array(state_prev.slider_state)[:,:2]) - np.abs(np.array(state_curr.slider_state)[:,:2]))
-                ).reshape(-1)
-            danger_list = np.array(state_curr.slider_state)[:,:2]
-
-            danger_list1 = ((np.abs(danger_list) + self.min_r * 2.0 - self.table_limit) / (self.min_r * 2.0)).reshape(-1)
-            danger_list1[np.where(danger_list1 < 0.0)[0]] = 0
-
-            danger_list1[np.where(np.abs(slider_distance) - 1e-9 < 0)[0]] = 0
-            danger_list1[np.where(slider_distance - 1e-9 > 0)[0]] *= -1
-
-            danger_list_num1 = danger_list1
-            reward += -10.0 * (np.sum(danger_list_num1) / 3)
 
         return reward
     
@@ -447,9 +378,13 @@ class Simulation():
 
         # 첫 번째 점을 포함한 최종 점 리스트
         return points, np.array(min_distances)
+    
     def get_image(self):
         return self.state_prev.image_state
 
+    def gripper_pose(self):
+        return self.state_prev.pusher_state
+    
 class DishSimulation():
     def __init__(self, visualize:str = 'human', state:str = 'image', action_skip:int = 5, record:bool = False, save_dir:str = "recordings"):
         self.env = Simulation(visualize = visualize, state = state, action_skip = action_skip, record = record, save_dir=save_dir)
@@ -458,46 +393,17 @@ class DishSimulation():
         self.save_dir = os.path.dirname(os.path.abspath(__file__)) + "/../../data/"
         self.skip_frame = 0
     
-    def reset(self, mode:str=None, slider_num:int = 15):
+    # def reset(self, 
+    #           table_size:List[float] = None,
+    #           slider_state:List[List[float]] = None,
+    #           slider_num:int=None,
+    def reset(self, mode:str=None, slider_num:int = 15, setting = None):
         if mode == None: 
             state_curr = self.env.reset(slider_num=slider_num)
             self._setting = self.env.get_state()
-
-        elif mode == "continous":
-            _setting = self.env.get_state()
-            if (self._setting == None) or (len(_setting["slider_state"]) == 0):
-                state_curr = self.env.reset(slider_num=slider_num)
-                self._setting = _setting
-            else:
-                state_curr = self.env.reset(
-                    table_size  = _setting["table_size"],
-                    slider_state = _setting["slider_state"],
-                    )
-        
-        elif mode == "pusher":
-            if self._count == 0:
-                state_curr = self.env.reset(slider_num=slider_num)
-                self._setting = self.env.get_state()
-                self._count += 1
-            else:
-                state_curr = self.env.reset(
-                    table_size  = self._setting["table_size"],
-                    slider_state = self._setting["slider_state"],
-                    )
-                self._count = (self._count + 1) % 4
-
-        elif mode == "test":
-            _setting = self.env.get_state()
-            if (self._setting == None) or (_setting["slider_num"] == 0):
-                state_curr = self.env.reset(slider_num=slider_num)
-                self._setting = _setting
-            else:
-                state_curr = self.env.reset(
-                    table_size  = _setting["table_size"],
-                    slider_state = _setting["slider_state"],
-                    )
         else: 
-            state_curr = self.env.reset(slider_num=slider_num)
+            state_curr = self.env.reset(table_size = setting["table_size"],
+                                        slider_state = setting["slider_state"],)
             self._setting = self.env.get_state()
         return state_curr
 

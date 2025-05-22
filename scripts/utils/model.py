@@ -10,91 +10,116 @@ import torch.nn as nn
 
 ## Parameters
 FILE_NAME = None
-N_INPUTS1   = 11
-N_INPUTS2   = 5
+N_INPUTS1   = 21 #9
+N_INPUTS2   = 19 #9
 N_OUTPUT    = 4
 
+def mask_attention_output(attn_output, mask):
+    """
+    attn_output: [batch, k, hidden_dim]
+    mask: [batch, k] (True: 패딩된 부분, False: 실제 장애물)
+    
+    패딩된 부분을 강제로 0으로 변환
+    """
+    if mask is not None:
+        mask_expanded = mask.unsqueeze(-1)  # [batch, k] → [batch, k, 1]
+        attn_output = attn_output.masked_fill(mask_expanded, 0.0)
+    return attn_output
+
+class SelfAttentionObstacle(nn.Module):
+    def __init__(self, obs_dim=10, hidden_dim=1024):
+        super(SelfAttentionObstacle, self).__init__()
+        hidden_dim = int(hidden_dim / 2)
+        self.mean_layer = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.max_layer = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, obs, mask=None):
+        obs = obs.permute(0, 2, 1)  # [batch, k, 10]
+
+        valid_mask = (obs.abs().sum(dim=2) != 0)  # 실제 장애물 여부
+        valid_counts = valid_mask.sum(dim=1, keepdim=True).clamp(min=1e-6)  # [batch, 1]
+
+        mean_obs = self.mean_layer(obs)
+        max_obs = self.max_layer(obs)
+
+        # 패딩은 무시하고 평균 계산
+        mean_obs_masked = mean_obs.masked_fill(~valid_mask.unsqueeze(-1), 0.0)  # 패딩된 부분을 0으로 만듦
+        mean_obs = mean_obs_masked.sum(dim=1) / valid_counts  # [batch, dim]
+
+        max_obs_masked = max_obs.masked_fill(~valid_mask.unsqueeze(-1), -1e9)  # 패딩된 부분을 -1e9으로 만듦
+        max_obs = max_obs_masked.max(dim=1)[0] / valid_counts  # [batch, dim]
+
+        return torch.cat([mean_obs, max_obs], dim=1)
+
+
 class ActorNetwork(nn.Module):
-    def __init__(self, device, n_state:int = N_INPUTS1, n_obs:int = N_INPUTS2, n_action:int = N_OUTPUT):
+    def __init__(self, n_state:int = N_INPUTS1, n_obs:int = N_INPUTS2, n_action:int = N_OUTPUT):
         super(ActorNetwork, self).__init__()
-        self.device = device
         self.layer = nn.Sequential(
-            nn.Linear(n_state, 128),
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-        )
-        self.obs1_layer = nn.Sequential(
-            nn.Conv1d(n_obs,64, kernel_size=1),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-        )
-        self.t_net1 = nn.Sequential(
-            nn.Conv1d(64,64, kernel_size=1),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Conv1d(64,256, kernel_size=1),
-            nn.BatchNorm1d(256),
+            nn.Linear(n_state, 256),
             nn.ReLU(),
         )
 
-        self.t_net2 = nn.Sequential(
-            nn.Flatten(start_dim=1),
-            nn.Linear(256, 64*64),
-            nn.ReLU(),
-        )
-            
-        self.obs2_layer = nn.Sequential(
-            nn.Conv1d(64,128, kernel_size=1),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Conv1d(128,512, kernel_size=1),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-        )
+        self.self_attention = SelfAttentionObstacle(obs_dim=n_obs, hidden_dim=1024)
 
-        self.obs3_layer = nn.Sequential(
-            nn.Flatten(start_dim=1),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-        )
+        self.mu = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(1024 + 256, 1024),
+                nn.ReLU(),
+                nn.Linear(1024, 512),
+                nn.ReLU(),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Linear(128, n_action),
+            ) for _ in range(2)
+        ])
 
-        self.last_layer = nn.Sequential(
-            nn.Linear(512,256),
-            nn.ReLU(),
-        )
+        self.std = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(1024 + 256, 1024),
+                nn.ReLU(),
+                nn.Linear(1024, 512),
+                nn.ReLU(),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Linear(128, n_action),
+                nn.Softplus(),
+            ) for _ in range(2)
+        ])
 
-        self.mu = nn.Sequential(
-            nn.Linear(256,n_action),
-        )
-        self.std = nn.Sequential(
-            nn.Linear(256,n_action),
-            nn.Softplus(),
-        )
+    def forward(self, state, obs, mode):
+        mode = mode.long().view(-1, 1)
 
-    def forward(self, state):
-        x = torch.tensor(state[0], dtype=torch.float32, device=self.device).unsqueeze(0)
-        obs   = torch.tensor(state[1].T, dtype=torch.float32, device=self.device).unsqueeze(0)
+        # State branch
+        _state = self.layer(state)  # [batch, 1024]
 
-        x = self.layer(x)
-        obs = self.obs1_layer(obs)
-        _t = self.t_net1(obs)
-        _t = torch.max(_t, 2, keepdim=True)[0]
-        _t = self.t_net2(_t)
-        _t = _t.view(-1, 64, 64)
-        obs = torch.bmm(_t, obs)
-        obs = self.obs2_layer(obs)
-        obs = torch.max(obs, 2, keepdim=True)[0]
-        obs = self.obs3_layer(obs)
+        # Mask
+        # Mask if obstacle not exist in each k
+        valid_mask = (obs.abs().sum(dim=1) != 0)  # [batch, k]
+        mask = (obs.abs().sum(dim=1) == 0)
+        # Mask if obstacle not existd in every k
 
-        x=self.last_layer(torch.cat([x, obs], dim=1))
+        # Obs self attention
+        _obs = self.self_attention(obs, mask)  # [batch, 1024]
+        _state = torch.cat([_state, _obs], dim=1)
 
-        mu = self.mu(x)
-        std = self.std(x)
+        mode_idx = mode.item()
+        mu = self.mu[mode_idx](_state)
+        std = self.std[mode_idx](_state)
 
         # sample
         distribution = torch.distributions.Normal(mu, std)
@@ -104,98 +129,4 @@ class ActorNetwork(nn.Module):
         action = torch.tanh(u)
 
         # return action, logprob
-        return action[0].tolist()
-   
-class ActorNetworkNew(nn.Module):
-    def __init__(self, device, n_state:int = N_INPUTS1, n_obs:int = N_INPUTS2, n_action:int = N_OUTPUT):
-        super(ActorNetwork, self).__init__()
-        self.device = device
-        self.layer = nn.Sequential(
-            nn.Linear(n_state, 128),
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 512),
-            nn.ReLU(),
-        )
-        self.obs1_layer = nn.Sequential(
-            nn.Conv1d(n_obs,128, kernel_size=1),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-        )
-        self.t_net1 = nn.Sequential(
-            nn.Conv1d(128,128, kernel_size=1),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Conv1d(128,512, kernel_size=1),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-        )
-
-        self.t_net2 = nn.Sequential(
-            nn.Flatten(start_dim=1),
-            nn.Linear(512, 128*128),
-            nn.ReLU(),
-        )
-            
-        self.obs2_layer = nn.Sequential(
-            nn.Conv1d(128,256, kernel_size=1),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Conv1d(256,512, kernel_size=1),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-        )
-
-        self.obs3_layer = nn.Sequential(
-            nn.Flatten(start_dim=1),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-        )
-
-        self.last_layer = nn.Sequential(
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-        )
-
-        self.mu = nn.Sequential(
-            nn.Linear(256,n_action),
-        )
-        self.std = nn.Sequential(
-            nn.Linear(256,n_action),
-            nn.Softplus(),
-        )
-
-    def forward(self, state):
-        x = torch.tensor(state[0], dtype=torch.float32, device=self.device).unsqueeze(0)
-        obs   = torch.tensor(state[1].T, dtype=torch.float32, device=self.device).unsqueeze(0)
-
-        x = self.layer(x)
-        obs = self.obs1_layer(obs)
-        _t = self.t_net1(obs)
-        _t = torch.max(_t, 2, keepdim=True)[0]
-        _t = self.t_net2(_t)
-        _t = _t.view(-1, 64, 64)
-        obs = torch.bmm(_t, obs)
-        obs = self.obs2_layer(obs)
-        obs = torch.max(obs, 2, keepdim=True)[0]
-        obs = self.obs3_layer(obs)
-
-        x=self.last_layer(torch.cat([x, obs], dim=1))
-
-        mu = self.mu(x)
-        std = self.std(x)
-
-        # sample
-        distribution = torch.distributions.Normal(mu, std)
-        u = distribution.rsample()
-
-        # Enforce action bounds [-1., 1.]
-        action = torch.tanh(u)
-
-        # return action, logprob
-        return action[0].tolist()
+        return action.squeeze().cpu().numpy()

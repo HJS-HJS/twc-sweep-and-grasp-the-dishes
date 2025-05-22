@@ -1,29 +1,31 @@
 simulator:
-  fps      : 50  # 100 fps
+  fps      : 100  # 100 fps
   sim_step : 100  # Maximun LCP solver step
   dist_threshold: 5e-2 # Distance to decide whether to calculate parameters
-  frame_skip: 8
+  frame_skip: 16
+  visualize : human # None, human
 
 display:
-  WIDTH : 1200
-  HEIGHT: 1200
-  unit:   0.0016 # [m/pixel]
+  WIDTH : 1024
+  HEIGHT: 1024
+  unit:   0.001464844 # [m/pixel]
 
 pusher:
   pusher_num      : 3
 
   pusher_angle    : 120
   pusher_distance : 0.04
-  pusher_d_u_limit: 0.17
-  pusher_d_l_limit: 0.04
+  # pusher_d_u_limit: 0.185
+  pusher_d_u_limit: 0.19
+  pusher_d_l_limit: 0.06
   pusher_type     : {"type": "superellipse", "a": 0.015, "b": 0.03, "n": 10}
 
   pusher_position : [0.0, -1.2]
   pusher_rotation : 0
 
-  unit_v_speed    : 0.1  # [m/s]
-  unit_r_speed    : 0.15  # [rad/s]
-  unit_w_speed    : 0.03   # [m/s]
+  unit_v_speed    : 0.10  # [m/s]
+  unit_r_speed    : 0.60  # [rad/s]
+  unit_w_speed    : 0.10   # [m/s]
 
 sliders:
   [

@@ -50,7 +50,7 @@ class Ellipse(object):
     @property
     def q(self):
         x,y,a,b,e,phi = self.pole
-        return np.array([[x,y,phi], a,b])
+        return np.array([x, y, phi, a, b])
 
     def point(self, angle:float):
         x0, y0, ap, bp, e, phi = self.pole

@@ -48,18 +48,14 @@ class SweepGraspDishesServer(object):
         self.gripper_config = rospy.get_param("~gripper")[self.planner_config["gripper"]]
         self.simulat_config = rospy.get_param("~simulator")
 
-        self.sim = DishSimulation(
-            visualize=None,
-            state="linear",
-            action_skip=self.simulat_config["frame_skip"],
-        )
         current_file_path = os.path.abspath(__file__)
         current_directory = os.path.dirname(current_file_path)
         model_path = current_directory + "/../model/SAC"
-        model_name = "1620"
+        # model_name = "test"
+        model_name = "0409"
         self.start_point = np.array(self.planner_config["start_point"])
 
-        self.actor = load_model(ActorNetwork(device).to(device), model_path, "actor", model_name)
+        self.actor = load_model(ActorNetwork().to(device), model_path, "actor", model_name)
 
         # Print param to terminal.
         rospy.loginfo("planner config: {}".format(self.planner_config))
@@ -153,10 +149,10 @@ class SweepGraspDishesServer(object):
         obs_ellipse_list=[]
         for _obs in obs_edge_list:
             _obs_ellipse = Ellipse(_obs.edge_xyz[:,0], _obs.edge_xyz[:,1])
-            if _obs_ellipse.q[0][0] < table_data_x[0]: continue
-            elif _obs_ellipse.q[0][0] > table_data_x[1]: continue
-            elif _obs_ellipse.q[0][1] < table_data_y[0]: continue
-            elif _obs_ellipse.q[0][1] > table_data_y[1]: continue
+            if _obs_ellipse.q[0] < table_data_x[0]: continue
+            elif _obs_ellipse.q[0] > table_data_x[1]: continue
+            elif _obs_ellipse.q[1] < table_data_y[0]: continue
+            elif _obs_ellipse.q[1] > table_data_y[1]: continue
             obs_ellipse_list.append(_obs_ellipse)
             slider_pose.append(_obs_ellipse.q)
 
@@ -165,7 +161,7 @@ class SweepGraspDishesServer(object):
         rospy.loginfo("target dish [m]: \t x: {:.3f}, y: {:.3f}".format(target_ellipse.center[0], target_ellipse.center[1]))
         # Obstacle dish
         if len(obs_ellipse_list) == 0:
-            return self.path_failed("obstacle dish not exist")
+            rospy.loginfo("obstacle dish not exist")
         else:
             rospy.loginfo("total obstacle dish num: {0}".format(len(obs_ellipse_list)))
         for _obs in obs_ellipse_list:
@@ -174,45 +170,128 @@ class SweepGraspDishesServer(object):
         slider_pose = np.array(slider_pose)
         table_center = np.array(table_center)
         for ellipse in slider_pose:
-            ellipse[0][:2] -= table_center[:2]
+            ellipse[:2] -= table_center[:2]
         
         pusher_pose = copy.deepcopy(self.start_point)
         pusher_pose[:,:2] -= table_center[:2]
         pusher_pose[:,2] *= (np.pi / 180)
         
         success = False
-        for i in range(len(pusher_pose)):
-            if success: break
-            rospy.loginfo("generating path #{0}".format(i))
+        rospy.loginfo("generate simulation env")
+        sim = DishSimulation(
+            visualize=self.simulat_config["visualize"],
+            state="linear",
+            action_skip=self.simulat_config["frame_skip"],
+        )
+        
+        path = []
+        move_idx = None
+        for start_idx in range(4):
+            rospy.loginfo("generating path {}".format(start_idx))
             path = []
             move_idx = None
-            state = self.sim.reset(
-                {
-                "table_size":table_size, 
-                "pusher_pose":np.hstack((pusher_pose[i,0], pusher_pose[i, 1], pusher_pose[i, 2], [0.185])),
-                "slider_pose":slider_pose, 
-                "slider_num":None
-                })
-            image_start = self.sim.env.get_image()
+            state_curr, _, _, mode = sim.reset(
+                mode = True,
+                setting = {
+                    "table_size":table_size, 
+                    "slider_state":slider_pose,
+                    "slider_num":None
+                    }
+                )
+            _, _, _, _ = sim.env.step([0.9, 0.9, 0, 0], 0)
+            state_curr, _, _, _ = sim.env.step([0, 0, 0, 0], 1)
+
+            state_curr1, state_curr2 = state_curr
+            state_curr1 = torch.tensor(state_curr1, dtype=torch.float32, device=device).unsqueeze(0)
+            state_curr2 = torch.tensor(state_curr2.T, dtype=torch.float32, device=device)
+
+            image_start = sim.env.image_without_gripper()
+            # image_mid = sim.env.get_image()
+            # image_end = sim.env.get_image()
             
-            for step in range(1, 300):
-                state, reward, done = self.sim.env.step(self.actor(state))
+            rospy.loginfo("start simulation")
+            # Running one episode
+            if start_idx == 0:
+                for step in range(1, 150):
+                    # 1. Get action from policy network
+                    with torch.no_grad():
+                        action = self.actor(state_curr1, state_curr2.unsqueeze(0), torch.tensor([mode], device=device).unsqueeze(0))
+
+                    if step > 10:
+                        rand = (2 * np.random.random(action.size) - 1) * (step / 150)
+                        rand[2:] *= 2
+                        action = np.clip(action + rand, -0.9999, 0.9999)
+
+                    # 2. Run simulation 1 step (Execute action and observe reward)
+                    state_next, reward, done, mode = sim.env.step(action, mode)
+
+                    if mode == 1:
+                        state_next1, state_next2 = state_next
+                        state_next1 = torch.tensor(state_next1, dtype=torch.float32, device=device).unsqueeze(0)
+                        state_next2 = torch.tensor(state_next2.T, dtype=torch.float32, device=device)
+                        state_curr1 = state_next1
+                        state_curr2 = state_next2
+                        break
+            else:
+                for step in range(1, 150):
+                    # 1. Get action from policy network
+                    action = np.array([-0.9, 0.9, 0, 0.5])
+                    if start_idx % 2 == 0:
+                        action[1] *= -1
+                    elif start_idx == 2:
+                        action = np.array([-0.9, 0.0, 0.0, 0.5])
+
+                    if step > 1:
+                        rand = (2 * np.random.random(action.size) - 1) * (step / 150)
+                        rand[2:] *= 2
+                        action = np.clip(action + rand, -0.9999, 0.9999)
+
+                    # 2. Run simulation 1 step (Execute action and observe reward)
+                    state_next, reward, done, mode = sim.env.step(action, mode)
+
+                    if mode == 1:
+                        state_next1, state_next2 = state_next
+                        state_next1 = torch.tensor(state_next1, dtype=torch.float32, device=device).unsqueeze(0)
+                        state_next2 = torch.tensor(state_next2.T, dtype=torch.float32, device=device)
+                        state_curr1 = state_next1
+                        state_curr2 = state_next2
+                        break
                 
-                path.append(self.sim.env.gripper_pose())
+
+            for step in range(1, 150):
+                with torch.no_grad():
+                    action = self.actor(state_curr1, state_curr2.unsqueeze(0), torch.tensor([mode], device=device).unsqueeze(0))
+                state_next, reward, done, mode = sim.env.step(action, mode)
+                
+                path.append(sim.env.gripper_pose())
                     
-                if move_idx == None and reward < 0:
+                state_next1, state_next2 = state_next
+                state_next1 = torch.tensor(state_next1, dtype=torch.float32, device=device).unsqueeze(0)
+                state_next2 = torch.tensor(state_next2.T, dtype=torch.float32, device=device)
+                state_curr1 = state_next1
+                state_curr2 = state_next2
+                
+                if reward < 0 and move_idx is None:
                     move_idx = step
-                    image_mid = self.sim.env.get_image()
+                    image_mid = sim.env.get_image()
                     
-                if done:
-                    after_ellipse_list = self.sim.env.ellipse_list()
-                    if reward > 0: success = True
-                    image_end = self.sim.env.get_image()
-                    break
+                if done: break
+
+            image_end = sim.env.get_image()
+            if reward > 3: 
+                success = True
+                break
+
+        rospy.loginfo("simulation finished")
+        del sim
+        
+        print("move_idx", move_idx)
         if move_idx is None:
             move_idx = len(path) - 1 if len(path) > 1 else len(path)
             image_mid = image_end
-        else: move_idx = move_idx - 5 if move_idx > 5 else move_idx
+        else: move_idx = move_idx - 1 if move_idx > 1 else move_idx
+        print("move_idx", move_idx)
+        print("path lengh", len(path))
         path = np.array(path)[move_idx:]
         path[:,:2] += table_center[:2]
         _spent_time = rospy.Duration.from_sec(step * self.simulat_config["frame_skip"] / self.simulat_config["fps"])
@@ -235,21 +314,6 @@ class SweepGraspDishesServer(object):
             # Draw target
             x, y = origin_target_ellipse.get_ellipse_pts()
             ax1.plot(x, y, color='green')
-
-            # Draw obs
-            for obs in obs_ellipse_list:
-                x, y = obs.get_ellipse_pts()
-                ax1.plot(x, y, color='midnightblue')
-            for obs in after_ellipse_list[1:]:
-                x, y = obs.points()
-                # ax1.fill_between(x + table_center[0], y + table_center[1], color='blue')
-                ax1.plot(x + table_center[0], y + table_center[1], color='blue', linewidth=8)
-                ax1.scatter(obs.q[0] + table_center[0], obs.q[1] + table_center[1])
-
-            x, y = after_ellipse_list[0].points()
-            # ax1.fill_between(x + table_center[0], y + table_center[1], color='lime')
-            ax1.plot(x + table_center[0], y + table_center[1], color='lime', linewidth=8)
-            ax1.scatter(after_ellipse_list[0].q[0] + table_center[0], after_ellipse_list[0].q[1] + table_center[1])
 
             # Draw path
             ax1.plot(path[:,0], path[:,1], 'red', linewidth=4)
@@ -300,7 +364,8 @@ class SweepGraspDishesServer(object):
         res = GetSweepGraspDishesPathResponse()   
         res.path = path_msg
         res.plan_successful = success
-        res.gripper_pose = [self.gripper_config["width"]]
+        # res.gripper_pose = [self.gripper_config["width"]]
+        res.gripper_pose = path[:,3].tolist()
         if success: rospy.loginfo('Path generation successed\n')
         else: rospy.loginfo('Path generation failed\n')
         return res
