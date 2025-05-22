@@ -1,4 +1,5 @@
 planner:
+  model: "6350"
   gripper: "hanyang"
   visualize: False
   publish_vis_topic: True

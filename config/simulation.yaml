@@ -2,13 +2,13 @@ simulator:
   fps      : 100  # 100 fps
   sim_step : 100  # Maximun LCP solver step
   dist_threshold: 5e-2 # Distance to decide whether to calculate parameters
-  frame_skip: 16
+  frame_skip: 40
   visualize : human # None, human
 
 display:
   WIDTH : 1024
   HEIGHT: 1024
-  unit:   0.001464844 # [m/pixel]
+  unit:   0.001953125 # [m/pixel]
 
 pusher:
   pusher_num      : 3
@@ -23,18 +23,14 @@ pusher:
   pusher_position : [0.0, -1.2]
   pusher_rotation : 0
 
-  unit_v_speed    : 0.10  # [m/s]
-  unit_r_speed    : 0.60  # [rad/s]
-  unit_w_speed    : 0.10   # [m/s]
+  unit_v_speed    : 0.05  # [m/s]
+  unit_r_speed    : 0.40  # [rad/s]
+  unit_w_speed    : 0.05   # [m/s]
 
 sliders:
   [
     ## Polygons
     {"type": "srpolygon",  'q':[-0.5, -0.25, 0.0] ,  "a": 0.15, "k": 6},
-    {"type": "srpolygon",  'q':[-0.25, 1.0, 0.4] ,   "a": 0.1,  "k": 3},
-    {"type": "srpolygon",  'q':[0.35, -0.25, -0.1] , "a": 0.24, "k": 4},
-    {"type": "srpolygon",  'q':[0.5, 0.5, 0.2] ,     "a": 0.15, "k": 5},
-    {"type": "srpolygon",  'q':[0.0, 1.0, 0.0] ,     "a": 0.12, "k": 8},
   ]
 
 obstacles:

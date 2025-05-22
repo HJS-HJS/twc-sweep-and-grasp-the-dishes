@@ -36,6 +36,9 @@ class Simulation():
         ## Set parameters
         # Set pixel unit
         self.unit = self.config["display"]["unit"] #[m/pixel]
+        # table range set
+        self.table_range = np.array([0.5, 1.25])
+        self.table_pixel_range = (self.table_range / self.unit).astype(int)
 
         # Set pusher
         _pusher_type = self.config["pusher"]["pusher_type"]
@@ -56,6 +59,7 @@ class Simulation():
         # Set simulation param
         self.fps = self.config["simulator"]["fps"]
         self.action_skip = action_skip
+        self.spawn_bias = 0.95
 
         self.pusher_input = [
             self.config["pusher"]["pusher_num"], self.config["pusher"]["pusher_angle"], _pusher_type["type"], 
@@ -82,8 +86,8 @@ class Simulation():
             window_height = self.display_size[1],
             scale = 1 / self.unit,
             headless = not visualize,
-            gripper_movement = GripperMotion.MOVE_TO_TARGET,
-            # gripper_movement = GripperMotion.MOVE_XY,
+            # gripper_movement = GripperMotion.MOVE_TO_TARGET,
+            gripper_movement = GripperMotion.MOVE_XY,
             # gripper_movement = GripperMotion.MOVE_FORWARD,
             frame_rate = self.fps,
             frame_skip = self.action_skip,
@@ -102,8 +106,8 @@ class Simulation():
                         
             # Table setting
             if table_size is None:
-                _table_limit_width  = random.randint(int(self.display_size[0] * 0.3), int(self.display_size[0] * 0.6))
-                _table_limit_height = random.randint(int(self.display_size[1] * 0.3), int(self.display_size[1] * 0.6))
+                _table_limit_width  = random.randint(self.table_pixel_range[0], self.table_pixel_range[1])
+                _table_limit_height = random.randint(self.table_pixel_range[0], self.table_pixel_range[1])
                 _table_limit = np.array([_table_limit_width, _table_limit_height])
                 table_size = _table_limit * self.unit
             else:
@@ -183,85 +187,102 @@ class Simulation():
     
     def get_results(self, state_prev: SimulationResult = None, state_curr: SimulationResult = None, mode:int = 0):
         # State
-        # width = self.display_size * self.unit / 2
-        _table = ((self.table_limit - 0.25) / 0.25) * 2 - 1
+        table_range_range = (self.table_range[1] - self.table_range[0]) / 2
+        
+        _table = ((self.table_limit - self.table_range[0] / 2) / table_range_range) * 2 - 1
+
         _pusher = copy.deepcopy(state_curr.pusher_state)
         if len(state_curr.slider_state) == 0:
             _sliders = copy.deepcopy(np.array(state_prev.slider_state))
+            _sliders_diff = _sliders - _sliders
+        elif state_prev is None:
+            _sliders = copy.deepcopy(np.array(state_curr.slider_state))
+            _sliders_diff = _sliders - _sliders
         else:
             _sliders = copy.deepcopy(np.array(state_curr.slider_state))
+            _sliders_diff = _sliders - np.array(state_prev.slider_state)
 
-        _pusher_width = copy.deepcopy(_pusher[3])
-        _pusher[3] = (_pusher[3] - self.pusher_width_limit[1]) / (self.pusher_width_limit[0] - self.pusher_width_limit[1]) * 2 - 1
 
-        _sliders_theta_sin = np.sin(_sliders[:,2])
+        _pusher_theta_cos = np.cos(_pusher[2])
+        _pusher_theta_sin = np.sin(_pusher[2])
         _sliders_theta_cos = np.cos(_sliders[:,2])
+        _sliders_theta_sin = np.sin(_sliders[:,2])
+
+        _pusher[3] = (_pusher[3] - self.pusher_width_limit[1]) / (self.pusher_width_limit[0] - self.pusher_width_limit[1]) * 2 - 1
         _sliders[:,3:5] = (_sliders[:,3:5] - self.min_r) / (self.max_r - self.min_r) * 2 - 1
 
-        fingers = np.array([
-            [_pusher[0] +  np.cos(_pusher[2] + np.pi / 6) * _pusher_width,
-             _pusher[1] +  np.sin(_pusher[2] + np.pi / 6) * _pusher_width],
-            [_pusher[0] +  np.cos(_pusher[2] + np.pi / 6 + np.pi * 2 / 3) * _pusher_width,
-             _pusher[1] +  np.sin(_pusher[2] + np.pi / 6 + np.pi * 2 / 3) * _pusher_width],
-            [_pusher[0] +  np.cos(_pusher[2] + np.pi / 6 + np.pi * 4 / 3) * _pusher_width,
-             _pusher[1] +  np.sin(_pusher[2] + np.pi / 6 + np.pi * 4 / 3) * _pusher_width],
-        ])
-
-        np.random.shuffle(fingers)
-
-        if mode <= 0:
-            _pusher = np.zeros_like(_pusher)
-            fingers = np.zeros_like(fingers)
-
-        _slider_edge = np.array([
-            [_sliders[0][0] +  _sliders[0][3] * _sliders_theta_cos[0],
-             _sliders[0][1] +  _sliders[0][3] * _sliders_theta_sin[0]],
-            [_sliders[0][0] + -_sliders[0][4] * _sliders_theta_sin[0],
-             _sliders[0][1] +  _sliders[0][4] * _sliders_theta_cos[0]],
-            [_sliders[0][0] + -_sliders[0][3] * _sliders_theta_cos[0],
-             _sliders[0][1] + -_sliders[0][3] * _sliders_theta_sin[0]],
-            [_sliders[0][0] +  _sliders[0][4] * _sliders_theta_sin[0],
-             _sliders[0][1] + -_sliders[0][4] * _sliders_theta_cos[0]],
-        ])
-        np.random.shuffle(_slider_edge)
+        relative_pose = (_sliders[0][:2] - _pusher[:2])
+        relative_dist = np.linalg.norm(relative_pose)
+        relative_pose /= relative_dist
 
         _state1 = np.hstack((
                 _table,
-                _sliders[0][:2] * 2,
-                _slider_edge.reshape(-1) * 2,
-                (len(_sliders) / 5) - 1,
-                _pusher[:2] * 2,
-                fingers.reshape(-1) * 2,
+                _pusher[:2] / self.table_limit,
+                _pusher_theta_cos,
+                _pusher_theta_sin,
+                _pusher[3],
+                _sliders[0][:2] / self.table_limit,
+                [
+                    _sliders_theta_cos[0],
+                    _sliders_theta_sin[0]
+                ],
+                _sliders[0][3:5],
+                relative_pose,
                 ))
 
-        _state2 = np.zeros(((len(_sliders)), 19))
+        _state2 = np.zeros(((len(_sliders)), 20))
+
+        pusher_theta = _pusher[2]
+        pusher_dir = np.array([np.cos(pusher_theta), np.sin(pusher_theta)])
 
         for idx in range(0, len(_sliders)):
 
-            if idx == 0: _target = -1
-            else:        _target = 1
+            if idx == 0: _target = -1.0
+            else:        _target = 1.0
+            
+            edge = np.sign(_sliders[idx][:2]) * (self.table_limit - np.abs(_sliders[idx][:2]))
 
-            _slider_edge = np.array([
-                [(_sliders[idx][0] +  _sliders[idx][3] * _sliders_theta_cos[idx]),
-                 (_sliders[idx][1] +  _sliders[idx][3] * _sliders_theta_sin[idx])],
-                [(_sliders[idx][0] + -_sliders[idx][4] * _sliders_theta_sin[idx]),
-                 (_sliders[idx][1] +  _sliders[idx][4] * _sliders_theta_cos[idx])],
-                [(_sliders[idx][0] + -_sliders[idx][3] * _sliders_theta_cos[idx]),
-                 (_sliders[idx][1] + -_sliders[idx][3] * _sliders_theta_sin[idx])],
-                [(_sliders[idx][0] +  _sliders[idx][4] * _sliders_theta_sin[idx]),
-                 (_sliders[idx][1] + -_sliders[idx][4] * _sliders_theta_cos[idx])],
-            ])
-            np.random.shuffle(_slider_edge)
+            if mode <= 0:
+                relative_pose = _sliders[idx][:2] - _sliders[0][:2]
+                relative_dist = 0.0
+            else:
+                relative_pose = _sliders[idx][:2] - _pusher[:2]
+                relative_dist = np.linalg.norm(relative_pose)
+                relative_pose /= relative_dist
+
+            # angle difference
+            angle_diff = np.arctan2(relative_pose[1], relative_pose[0]) - pusher_theta
+            angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi  # wrap to [-π, π]
+
+            # dot product
+            direction_alignment = np.dot(pusher_dir, relative_pose)
+
+
+            _sliders_movement_diff = _sliders_diff[idx][:2]
+            _sliders_movement_diff_dist = np.linalg.norm(_sliders_movement_diff) + 1e-9
+            _sliders_movement_diff /= _sliders_movement_diff_dist
+            _sliders_angle_diff = (_sliders_diff[idx][2] + np.pi) % (2 * np.pi) - np.pi
 
             _state2[idx] = np.concatenate([
                 _table,
                 [_target],
-                _sliders[idx][:2] * 2,
-                _slider_edge.reshape(-1) * 2,
-                fingers.reshape(-1) * 2,
+                _sliders[idx][:2] / self.table_limit,
+                [
+                    _sliders_theta_cos[idx],
+                    _sliders_theta_sin[idx]
+                ],
+                _sliders[idx][3:5],
+                relative_pose,
+                [relative_dist],
+                [angle_diff / np.pi],
+                [direction_alignment],
+                edge,
+                _sliders_movement_diff,
+                [_sliders_movement_diff_dist],
+                [_sliders_angle_diff / np.pi]
             ])
 
-        state = _state1 * 5, _state2 * 5
+        state = _state1, _state2
 
         if self.state == "linear":
             pass
@@ -280,59 +301,30 @@ class Simulation():
         return state, reward, state_curr.done, mode 
 
     def cal_init_reward(self, state_prev: SimulationResult, state_curr: SimulationResult):
-        return 0
+        return -1.0
     
     def cal_reward(self, state_prev: SimulationResult, state_curr: SimulationResult):
         if state_prev is None: return 0
 
-        ## Reward
-        reward = 0.1
-
         ## Failed
         if state_curr.done & SimulationDoneReason.DONE_FALL_OUT.value:
             print("DONE_FALL_OUT")
-            return -5.0
+            return -10.0
         if state_curr.done & SimulationDoneReason.DONE_GRASP_SUCCESS.value:
             print("DONE_GRASP_SUCCESS")
-            return 5.0
+            return 10.0
         if state_curr.done & SimulationDoneReason.DONE_GRASP_FAILED.value:
-            print("DONE_GRASP_FAILED")
-            return -5.0
+            print("DONE_GRASP_FAIL")
+            return -10.0
 
-        ## Pusher distance from target
-        pusher_distance_prev = np.linalg.norm(state_prev.pusher_state[:2] - state_prev.slider_state[0][:2])
-        if len(state_curr.slider_state) == 0:
-            pusher_distance_curr = pusher_distance_prev
-        else:
-            pusher_distance_curr = np.linalg.norm(state_curr.pusher_state[:2] - state_curr.slider_state[0][:2])
-        pusher_distance_diff = (pusher_distance_prev - pusher_distance_curr) * self.fps / self.action_skip
-
-        ## Slider
-        if len(state_prev.slider_state) != len(state_curr.slider_state):
-            reward += -0.1
-        else:
-            slider_distance = np.linalg.norm((np.array(state_prev.slider_state)[:,:2] - np.array(state_curr.slider_state)[:,:2]), axis=1)
-            slider_distance_diff = slider_distance * self.fps / self.action_skip
-
-            _delta_slider_dist = np.where(np.abs(slider_distance_diff[1:]) - 1e-5 > 0)[0]
-            if len(_delta_slider_dist) > 0:
-                reward += -0.5
-            if slider_distance_diff[0] - 1e-5 > 0:
-                reward += -0.5
-            
-            # Simulation break case
-            if np.max(np.abs(slider_distance_diff)) > 0.2:
-                print("SIMULATION BREAK")
-                reward = -1000
-
-        return reward
+        return reward -1.0
     
     def get_state(self):
         table_size = self.table_limit * 2
         slider_state = self.state_prev.slider_state
         return {"table_size":table_size, "slider_state":slider_state}
 
-    def generate_spawn_points(self, num_points, center_bias=0.7):
+    def generate_spawn_points(self, num_points):
         points = []
         x_range = ((-self.table_limit[0] + self.min_r * 1.3) * 0.9, (self.table_limit[0] - self.min_r * 1.3) * 0.9)
         y_range = ((-self.table_limit[1] + self.min_r * 1.3) * 0.9, (self.table_limit[1] - self.min_r * 1.3) * 0.9)
@@ -350,7 +342,7 @@ class Simulation():
         candidate_points = []
         for _ in range(num_points - 1):
             # 첫 번째 점 주변에서 가우시안 분포로 점 생성
-            if random.random() < center_bias:  # 중심 근처에 생성될 확률
+            if random.random() < self.spawn_bias:  # 중심 근처에 생성될 확률
                 new_x = np.clip(np.random.normal(center_x, random.uniform(*available_lengh)), *x_range)
                 new_y = np.clip(np.random.normal(center_y, random.uniform(*available_lengh)), *y_range)
             else:  # 전체 영역에 균일 분포로 생성
@@ -376,8 +368,16 @@ class Simulation():
             distances[idx] = self.max_r
             min_distances[idx] = min(distances)
 
+        min_distances = np.array(min_distances)
+
+        if random.random() < 0.4:
+            indices = np.random.permutation(len(points))
+            # 동일한 순서로 두 배열 섞기
+            points = points[indices]
+            min_distances = min_distances[indices]
+
         # 첫 번째 점을 포함한 최종 점 리스트
-        return points, np.array(min_distances)
+        return points, min_distances
     
     def get_image(self):
         return self.state_prev.image_state

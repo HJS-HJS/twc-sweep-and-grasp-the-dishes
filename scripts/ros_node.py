@@ -51,8 +51,7 @@ class SweepGraspDishesServer(object):
         current_file_path = os.path.abspath(__file__)
         current_directory = os.path.dirname(current_file_path)
         model_path = current_directory + "/../model/SAC"
-        # model_name = "test"
-        model_name = "0409"
+        model_name = self.planner_config["model"]
         self.start_point = np.array(self.planner_config["start_point"])
 
         self.actor = load_model(ActorNetwork().to(device), model_path, "actor", model_name)
