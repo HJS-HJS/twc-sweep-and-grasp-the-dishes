@@ -193,28 +193,49 @@ class Simulation():
         _table = ((self.table_limit - self.table_range[0] / 2) / table_range_range) * 2 - 1
 
         _pusher = copy.deepcopy(state_curr.pusher_state)
-        if len(state_curr.slider_state) == 0:
-            _sliders = copy.deepcopy(np.array(state_prev.slider_state))
-            _sliders_diff = _sliders - _sliders
-        elif state_prev is None:
+        if state_prev is None:
             _sliders = copy.deepcopy(np.array(state_curr.slider_state))
+            _sliders_diff = _sliders - _sliders
+        elif len(state_curr.slider_state) == 0 or len(state_curr.slider_state) != len(state_prev.slider_state):
+            _sliders = copy.deepcopy(np.array(state_prev.slider_state))
             _sliders_diff = _sliders - _sliders
         else:
             _sliders = copy.deepcopy(np.array(state_curr.slider_state))
             _sliders_diff = _sliders - np.array(state_prev.slider_state)
 
 
-        _pusher_theta_cos = np.cos(_pusher[2])
-        _pusher_theta_sin = np.sin(_pusher[2])
-        _sliders_theta_cos = np.cos(_sliders[:,2])
-        _sliders_theta_sin = np.sin(_sliders[:,2])
+        _pusher_theta_cos = np.cos(3 * _pusher[2])
+        _pusher_theta_sin = np.sin(3 * _pusher[2])
+        _sliders_theta_cos = np.cos(2 * _sliders[:,2])
+        _sliders_theta_sin = np.sin(2 * _sliders[:,2])
+
+        pusher_angle = (_pusher[2] - np.pi/3) % (np.pi / 3 * 2) + np.pi / 6
+        pusher_angle_set = np.array([
+            (pusher_angle) % (2 * np.pi),
+            (pusher_angle + np.pi / 3 * 2) % (2 * np.pi),
+            (pusher_angle + np.pi / 3 * 4) % (2 * np.pi)
+            ])
+        pusher_vector_set = np.vstack([np.cos(pusher_angle_set), np.sin(pusher_angle_set)]).T
 
         _pusher[3] = (_pusher[3] - self.pusher_width_limit[1]) / (self.pusher_width_limit[0] - self.pusher_width_limit[1]) * 2 - 1
         _sliders[:,3:5] = (_sliders[:,3:5] - self.min_r) / (self.max_r - self.min_r) * 2 - 1
 
-        relative_pose = (_sliders[0][:2] - _pusher[:2])
-        relative_dist = np.linalg.norm(relative_pose)
-        relative_pose /= relative_dist
+        if mode <= 0:
+            relative_pose = _sliders[0][:2]
+            relative_dist = np.linalg.norm(relative_pose) + 1e-6
+            _pusher[:2] = 0
+            # angle difference
+            angle_diff = np.zeros(1)
+        else:
+            relative_pose = (_sliders[0][:2] - _pusher[:2])
+            relative_dist = np.linalg.norm(relative_pose) + 1e-6
+            relative_pose /= relative_dist
+            # angle difference
+            angle_diff = np.arctan2(relative_pose[1], relative_pose[0])
+            closest_angle = np.argmax(pusher_vector_set.dot(relative_pose))
+            angle_diff = (angle_diff - pusher_angle_set[closest_angle]) % (2 * np.pi)
+            if angle_diff > np.pi: angle_diff -= 2 * np.pi
+            angle_diff /= (np.pi / 3)
 
         _state1 = np.hstack((
                 _table,
@@ -222,51 +243,53 @@ class Simulation():
                 _pusher_theta_cos,
                 _pusher_theta_sin,
                 _pusher[3],
-                _sliders[0][:2] / self.table_limit,
+                # _sliders[0][:2] / self.table_limit,
                 [
                     _sliders_theta_cos[0],
                     _sliders_theta_sin[0]
                 ],
                 _sliders[0][3:5],
                 relative_pose,
+                relative_dist,
+                angle_diff
                 ))
 
-        _state2 = np.zeros(((len(_sliders)), 20))
+        _state2 = np.zeros(((len(_sliders)), 16))
 
-        pusher_theta = _pusher[2]
-        pusher_dir = np.array([np.cos(pusher_theta), np.sin(pusher_theta)])
 
         for idx in range(0, len(_sliders)):
 
-            if idx == 0: _target = -1.0
-            else:        _target = 1.0
-            
-            edge = np.sign(_sliders[idx][:2]) * (self.table_limit - np.abs(_sliders[idx][:2]))
+            edge = (self.table_limit - np.abs(_sliders[idx][:2]))
+            danger_dir = np.sign(_sliders[idx][:2])
+            danger_ratio = np.clip(1 - (edge) / (self.min_r * 4.0), 0.0, 1.0)
+            danger_vec = danger_dir * danger_ratio
 
-            if mode <= 0:
-                relative_pose = _sliders[idx][:2] - _sliders[0][:2]
-                relative_dist = 0.0
-            else:
-                relative_pose = _sliders[idx][:2] - _pusher[:2]
-                relative_dist = np.linalg.norm(relative_pose)
-                relative_pose /= relative_dist
+            if mode <= 0: relative_pose = _sliders[idx][:2] - _sliders[0][:2]
+            else:         relative_pose = _sliders[idx][:2] - _pusher[:2]
+            relative_dist = np.linalg.norm(relative_pose) + 1e-6
+            relative_pose /= relative_dist
 
             # angle difference
-            angle_diff = np.arctan2(relative_pose[1], relative_pose[0]) - pusher_theta
-            angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi  # wrap to [-π, π]
+            if mode <= 0: 
+                angle_diff = np.arctan2(relative_pose[1], relative_pose[0]) - _sliders[idx][2]
+                angle_diff = (angle_diff + np.pi / 2) % (np.pi) - np.pi / 2  # wrap to [-π, π]
+                angle_diff /= (np.pi / 2) # wrap to [-1, 1]
+            else:
+                angle_diff = np.arctan2(relative_pose[1], relative_pose[0])
 
-            # dot product
-            direction_alignment = np.dot(pusher_dir, relative_pose)
-
+                closest_angle = np.argmax(pusher_vector_set.dot(relative_pose))
+                angle_diff = (angle_diff - pusher_angle_set[closest_angle]) % (2 * np.pi)
+                if angle_diff > np.pi: angle_diff -= 2 * np.pi
+                angle_diff /= (np.pi / 3)
 
             _sliders_movement_diff = _sliders_diff[idx][:2]
-            _sliders_movement_diff_dist = np.linalg.norm(_sliders_movement_diff) + 1e-9
-            _sliders_movement_diff /= _sliders_movement_diff_dist
-            _sliders_angle_diff = (_sliders_diff[idx][2] + np.pi) % (2 * np.pi) - np.pi
+            _sliders_movement_diff_dist = np.linalg.norm(_sliders_movement_diff)
+            _sliders_movement_diff /= _sliders_movement_diff_dist + 1e-6
+            _sliders_movement_diff_dist *= self.fps / self.action_skip
 
             _state2[idx] = np.concatenate([
                 _table,
-                [_target],
+                [-1.0 if idx == 0 else 1.0],
                 _sliders[idx][:2] / self.table_limit,
                 [
                     _sliders_theta_cos[idx],
@@ -275,12 +298,9 @@ class Simulation():
                 _sliders[idx][3:5],
                 relative_pose,
                 [relative_dist],
-                [angle_diff / np.pi],
-                [direction_alignment],
-                edge,
-                _sliders_movement_diff,
-                [_sliders_movement_diff_dist],
-                [_sliders_angle_diff / np.pi]
+                [_pusher[3]],
+                [angle_diff],
+                danger_vec
             ])
 
         state = _state1, _state2

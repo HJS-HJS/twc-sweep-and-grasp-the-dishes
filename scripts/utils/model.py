@@ -2,13 +2,12 @@
 SAC (Soft Actor Critic)
 - continous action
 '''
-import numpy as np
 import torch
 import torch.nn as nn
 
 ## Parameters
-N_INPUTS1   = 15 #9
-N_INPUTS2   = 20 #9
+N_INPUTS1   = 15
+N_INPUTS2   = 16
 N_OUTPUT    = 4
 
 class InteractionNetwork(nn.Module):
@@ -19,12 +18,14 @@ class InteractionNetwork(nn.Module):
             nn.Linear(obs_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
         )
         self.node_mlp = nn.Sequential(
             nn.Linear(obs_dim + hidden_dim + state_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_hidden_dim)
+            nn.Linear(hidden_dim, hidden_hidden_dim),
         )
 
         self.norm = nn.LayerNorm(hidden_dim)
