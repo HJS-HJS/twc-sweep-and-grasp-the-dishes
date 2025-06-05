@@ -297,30 +297,44 @@ class SweepGraspDishesServer(object):
 
         # vis
         if self.planner_config["visualize"]:
-            origin_target_ellipse = Ellipse(target_edge.edge_xyz[:,0], target_edge.edge_xyz[:,1])
-            
             fig = plt.figure(figsize=(10,10))
-            ax1 = fig.add_subplot(221)
-            ax2 = fig.add_subplot(222)
-            ax3 = fig.add_subplot(223)
-            ax4 = fig.add_subplot(224)
+            ax1 = fig.add_subplot(231)
+            ax2 = fig.add_subplot(232)
+            fig1 = fig.add_subplot(234)
+            fig2 = fig.add_subplot(235)
+            fig3 = fig.add_subplot(236)
             ax1.grid(True)
+            ax2.grid(True)
             
             # Draw table
             ax1.set_xlim([table_corners[0] - 0.1, table_corners[1] + 0.1])
             ax1.set_ylim([table_corners[2] - 0.1, table_corners[3] + 0.1])
+            ax2.set_xlim([table_corners[0] - 0.1, table_corners[1] + 0.1])
+            ax2.set_ylim([table_corners[2] - 0.1, table_corners[3] + 0.1])
 
             # Draw target
+            x, y = target_edge.edge_xyz[:,0], target_edge.edge_xyz[:,1]
+            ax1.plot(x, y, color='black')
+            for obs in obs_edge_list:
+                x, y = obs.edge_xyz[:,0], obs.edge_xyz[:,1]
+                ax1.plot(x, y, color='black')
+            
+            origin_target_ellipse = Ellipse(target_edge.edge_xyz[:,0], target_edge.edge_xyz[:,1])
             x, y = origin_target_ellipse.get_ellipse_pts()
-            ax1.plot(x, y, color='green')
+            ax2.plot(x, y, color='black')
+            for obs in obs_ellipse_list:
+                x, y = obs.get_ellipse_pts()
+                ax2.plot(x, y, color='black')
+            
 
             # Draw path
-            ax1.plot(path[:,0], path[:,1], 'red', linewidth=4)
+            ax2.plot(path[:,0], path[:,1], 'red', linewidth=4)
 
             ax1.set_aspect('equal')
-            ax2.imshow(image_start)
-            ax3.imshow(image_mid)
-            ax4.imshow(image_end)
+            ax2.set_aspect('equal')
+            fig1.imshow(image_start[:, :, ::-1])
+            fig2.imshow(image_mid[:, :, ::-1])
+            fig3.imshow(image_end[:, :, ::-1])
                 
             plt.show()
 

@@ -401,7 +401,7 @@ class DishSimulation():
                 state_curr = self.env.reset(slider_num=slider_num)
             else:
                 state_curr = self.env.reset(table_size = setting["table_size"],
-                                            slider_state = np.array(setting["slider_state"])[1:],)
+                                            slider_state = np.array(setting["slider_state"]),)
         return state_curr
 
     def keyboard_control(self):
